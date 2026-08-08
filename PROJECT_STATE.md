@@ -282,6 +282,10 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 | #02.6  | Bugfix: auto-hide cursor guard         | ✅     |
 | #03    | Controle de volume (Master slider)     | ✅     |
 | #14    | Rebranding global: KSlide → PEEK       | ✅     |
+| #16    | Bug Smash: assimetria/overlap botões   | ✅     |
+| #16.2  | Debug visual (bordas coloridas)        | ✅     |
+| #16.3  | Correção definitiva: geometria botões  | ✅     |
+| #16.4  | Ajuste fino: margens → botões imponentes | ✅   |
 
 ---
 

@@ -105,8 +105,8 @@ class MediaPlayerWidget(QFrame):
         )
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(16, 16, 16, 16)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(10, 12, 10, 12)  # L/R reduzido de 16→10 para ganhar 12px
+        main_layout.setSpacing(10)
 
         # ── Label de seção ───────────────────────────────────────────
         self._section_label = QLabel("REPRODUZINDO")
@@ -117,7 +117,7 @@ class MediaPlayerWidget(QFrame):
 
         # ── HBox de conteúdo: capa + detalhes ────────────────────────
         content_row = QHBoxLayout()
-        content_row.setSpacing(12)
+        content_row.setSpacing(8)  # Reduzido de 12→8 para ganhar 4px
 
         # Capa do álbum (esquerda)
         self._art_label = QLabel()
@@ -135,54 +135,61 @@ class MediaPlayerWidget(QFrame):
 
         self._title_label = MarqueeLabel("Nenhum player detectado")
         self._title_label.setObjectName("trackTitle")
-        self._title_label.setFixedHeight(20) # Espaço suficiente para a fonte
+        self._title_label.setFixedHeight(20)
         details_col.addWidget(self._title_label)
 
         self._artist_label = QLabel("—")
         self._artist_label.setObjectName("trackArtist")
         self._artist_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self._artist_label.setWordWrap(True)
+        self._artist_label.setContentsMargins(0, 0, 0, 4)
         details_col.addWidget(self._artist_label)
 
-        # Margem reduzida abaixo do artista para aproximar da barra
-        self._artist_label.setContentsMargins(0, 0, 0, 4)
-
-        # ── HBox da Seek Bar com Timestamps ──────────────────────────
-        seek_layout = QHBoxLayout()
-        seek_layout.setSpacing(0)
-        seek_layout.setContentsMargins(0, 0, 0, 0)
-        
+        # ── Seek Bar ─────────────────────────────────────────────────
         self._seek_slider = _SeekSlider()
         self._seek_slider.sliderMoved.connect(self.seek_requested)
-        seek_layout.addWidget(self._seek_slider)
-        
-        details_col.addLayout(seek_layout)
+        details_col.addWidget(self._seek_slider)
 
-        # ── Respiro Vertical ──────────────────────────────────────────
-        details_col.addSpacing(12)
+        details_col.addSpacing(8)
 
-        # ── HBox de controles ────────────────────────────────────────
+        # ── Container Shield dos botões ──────────────────────────────────
+        # Orçamento real (após ajuste de margens, Task #16.4):
+        #   360px (sidebar) - 20px (card L+R) - 14px (mixer) - 12px (spacing)
+        #   - 20px (media L+R) - 80px (art) - 8px (art→details spacing) = 206px
+        #
+        # Geometria escolhida:
+        #   Prev(44) + gap(8) + Play(64) + gap(8) + Next(44) = 168px
+        #   Folga para stretchs: 206 - 168 = 38px → 19px por lado ✓
+        BTN_H: int = 28
+        BTN_SIDE_W: int = 44
+        BTN_PLAY_W: int = 64
+
         self.ctrl_container = QWidget()
-        self.ctrl_container.setFixedHeight(35)
-        self.ctrl_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.ctrl_container.setFixedHeight(BTN_H + 4)
+        self.ctrl_container.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
 
         btn_layout = QHBoxLayout(self.ctrl_container)
-        btn_layout.setSpacing(16)
+        btn_layout.setSpacing(8)
         btn_layout.setContentsMargins(0, 0, 0, 0)
 
         self._btn_prev = QPushButton("⏮")
         self._btn_prev.setObjectName("btnPrev")
+        self._btn_prev.setFixedSize(BTN_SIDE_W, BTN_H)
 
         self._btn_play = QPushButton("▶")
         self._btn_play.setObjectName("btnPlay")
+        self._btn_play.setFixedSize(BTN_PLAY_W, BTN_H)
 
         self._btn_next = QPushButton("⏭")
         self._btn_next.setObjectName("btnNext")
+        self._btn_next.setFixedSize(BTN_SIDE_W, BTN_H)
 
         btn_layout.addStretch(1)
-        btn_layout.addWidget(self._btn_prev)
-        btn_layout.addWidget(self._btn_play)
-        btn_layout.addWidget(self._btn_next)
+        btn_layout.addWidget(self._btn_prev, 0, Qt.AlignmentFlag.AlignVCenter)
+        btn_layout.addWidget(self._btn_play, 0, Qt.AlignmentFlag.AlignVCenter)
+        btn_layout.addWidget(self._btn_next, 0, Qt.AlignmentFlag.AlignVCenter)
         btn_layout.addStretch(1)
 
         details_col.addWidget(self.ctrl_container)
@@ -342,16 +349,12 @@ class MediaPlayerWidget(QFrame):
                 color: #cdd6f4;
                 border: none;
                 outline: none;
-                border-radius: 14px;
+                border-radius: 14px;   /* BTN_H/2 = 28/2 = 14 — pílula perfeita */
                 font-size: 14px;
                 text-align: center;
                 margin: 0px;
                 padding: 0px;
-                /* Dimensões mínimas para Prev/Next */
-                min-width:  50px;
-                max-width:  50px;
-                min-height: 28px;
-                max-height: 28px;
+                /* Sem min/max-width — setFixedSize() em Python é a fonte de verdade */
             }
 
             QPushButton:hover {
@@ -367,12 +370,7 @@ class MediaPlayerWidget(QFrame):
                 color: #1e1e2e;
                 font-size: 16px;
                 border-radius: 14px;
-                padding-left: 4px;
-                /* Sobrescreve somente a largura do Play */
-                min-width:  70px;
-                max-width:  70px;
-                min-height: 28px;
-                max-height: 28px;
+                padding-left: 3px;  /* Alinhamento ótico do triângulo ▶ */
             }
 
             #btnPlay:hover {

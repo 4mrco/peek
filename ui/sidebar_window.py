@@ -103,7 +103,7 @@ class SidebarWindow(QWidget):
         
         # O layout interno do card principal (contém Mixer na esq. e Player na dir.)
         card_layout = QHBoxLayout(self.main_card)
-        card_layout.setContentsMargins(16, 16, 16, 16)
+        card_layout.setContentsMargins(10, 16, 10, 16)  # L/R reduzido de 16→10 (+12px úteis)
         card_layout.setSpacing(12)
 
         # ── Área do Mixer (Esquerda) ──
