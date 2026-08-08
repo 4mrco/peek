@@ -244,6 +244,11 @@ filhos. O timer só roda enquanto o painel estiver visível e o mouse estiver
 **Detalhe importante:** `set_volume()` no slider usa `blockSignals(True)` para
 evitar loop infinito (backend → UI → backend → ...).
 
+### 11. **Preparação Open-Source (GitHub)**
+O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
+- `requirements.txt`: Isolando `PySide6` e `pulsectl`.
+- `README.md`: Definindo os escopos experimentais (Wayland/KDE), filosofia "Zero Bloat" e "Progressive Disclosure", além de um panorama claro da Tech Stack (Python, Qt6, D-Bus, Multithreading de Áudio) e instruções de execução local.
+
 ---
 
 ## Componentes e Sinais
