@@ -1,0 +1,14 @@
+{
+    "KPlugin": {
+        "Id": "kslide-edge-trigger",
+        "Name": "PEEK Edge Trigger",
+        "Description": "Triggers the PEEK sidebar when the mouse reaches the top-right screen corner",
+        "Version": "0.2",
+        "Authors": [
+            { "Name": "PEEK Project" }
+        ]
+    },
+    "X-Plasma-API": "javascript",
+    "X-Plasma-MainScript": "code/main.js",
+    "KPackageStructure": "KWin/Script"
+}

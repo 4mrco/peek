@@ -1,0 +1,19 @@
+# Python bytecode e caches do PySide6
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ambientes virtuais (caso você crie no futuro)
+.venv/
+venv/
+
+# Ide e editores
+.vscode/
+.idea/
+
+# SWP do Vim / arquivos temporários
+*.swp
+*~
+# AI Agents
+.agents/
