@@ -33,7 +33,7 @@ Recomendamos o uso de um ambiente virtual para isolar as dependências do PEEK:
 
 ```bash
 # Clone o repositório
-git clone https://github.com/SEU_USUARIO/peek.git
+git clone https://github.com/4mrco/peek.git
 cd peek
 
 # Crie e ative o ambiente virtual
