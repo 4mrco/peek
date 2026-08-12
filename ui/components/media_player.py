@@ -17,6 +17,7 @@ a lógica de backend fica no Controller.
 """
 
 from __future__ import annotations
+import time
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QPainter, QPainterPath, QPixmap, QPaintEvent
@@ -90,6 +91,7 @@ class MediaPlayerWidget(QFrame):
         self._is_playing: bool = False
         self._current_pos_s: int = 0
         self._duration_s: int = 0
+        self._last_seek_time: float = 0.0  # Marcação temporal do último seek do usuário
         self._setup_ui()
         self._connect_buttons()
 
@@ -147,7 +149,10 @@ class MediaPlayerWidget(QFrame):
 
         # ── Seek Bar ─────────────────────────────────────────────────
         self._seek_slider = _SeekSlider()
-        self._seek_slider.sliderMoved.connect(self.seek_requested)
+        # sliderMoved: resposta visual imediata durante o drag (atualiza timer)
+        self._seek_slider.sliderMoved.connect(self._on_slider_moved)
+        # sliderReleased: único ponto de dispar o seek real (drag + clique)
+        self._seek_slider.sliderReleased.connect(self._on_slider_released)
         details_col.addWidget(self._seek_slider)
 
         details_col.addSpacing(8)
@@ -290,10 +295,28 @@ class MediaPlayerWidget(QFrame):
     def clear_art(self) -> None:
         """Limpa a capa do álbum, voltando ao placeholder."""
         self._set_placeholder_art()
-        
+
+    @Slot(int)
+    def _on_slider_moved(self, val: int) -> None:
+        """Durante o drag: atualiza apenas o display de tempo — sem enviar D-Bus."""
+        self._seek_slider.set_time_current(self._format_time(val))
+
+    @Slot()
+    def _on_slider_released(self) -> None:
+        """Ao soltar: dispara o seek real e arma a trava anti-snapback."""
+        val = self._seek_slider.value()
+        self._last_seek_time = time.time()  # Arma a trava
+        self.seek_requested.emit(val)
+
     @Slot(int)
     def update_position(self, pos_us: int) -> None:
-        """Atualiza a posição da seek bar (pos_us vem em microsegundos do MPRIS)."""
+        """Atualiza a posição da seek bar (pos_us vem em microsegundos do MPRIS).
+        
+        A trava anti-snapback ignora o polling por 1.5s após o usuário soltar a barra,
+        dando tempo ao Spotify de aplicar o seek sem que o timer sobrescreva a UI.
+        """
+        if time.time() - self._last_seek_time < 1.5:
+            return
         sec = pos_us // 1_000_000
         self._current_pos_s = sec
         self._seek_slider.set_time_current(self._format_time(sec))
@@ -438,6 +461,9 @@ class _SeekSlider(QSlider):
             # O X=0 é a base (valor mínimo) e width() é o máximo
             val = self.minimum() + ((self.maximum() - self.minimum()) * event.pos().x()) / self.width()
             self.setValue(int(val))
+            # Dispara sliderReleased para acionar o seek e a trava anti-snapback,
+            # sem precisar arrastar (clique direto na barra)
+            self.sliderReleased.emit()
             event.accept()
         super().mousePressEvent(event)
 

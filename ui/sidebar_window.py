@@ -24,12 +24,12 @@ from PySide6.QtCore import (
     QPropertyAnimation,
     QRect,
     Qt,
+    QTimer,
     Signal,
     Slot
 )
-from PySide6.QtGui import QEnterEvent, QMouseEvent
-from PySide6.QtGui import QEnterEvent, QMouseEvent
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QVBoxLayout, QWidget, QFrame
+from PySide6.QtGui import QEnterEvent, QGuiApplication
+from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFrame
 from typing import Any
 
 from ui.components.media_player import MediaPlayerWidget
@@ -47,15 +47,27 @@ class SidebarWindow(QWidget):
     ANIMATION_DURATION_MS: int = 250
 
     def __init__(self, parent: QWidget | None = None) -> None:
+        # Recupera o parent (âncora) passado pelo Controller para satisfazer
+        # a restrição de xdg_popup do Wayland quando usamos Qt.ToolTip.
         super().__init__(parent)
         self._is_visible: bool = False
-        
+
         # Ativa o rastreamento nativo do mouse (inclusive nos filhos principais)
         self.setMouseTracking(True)
-        
+
         self._app_sliders: dict[int, VolumeSlider] = {}
-        
+
         self._setup_window_flags()
+
+        # ── Early Severing (Wayland) ──────────────────────────────────
+        # WA_NativeWindow força a criação imediata do QWindow nativo ANTES do
+        # primeiro show().
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
+
+        # Título distinto: o KWin faz cache de geometria por WM_CLASS/title.
+        # "PeekSidebar" isola completamente o cache da sidebar do Control Center.
+        self.setWindowTitle("PeekSidebar")
+
         self._setup_ui()
         self._setup_animation()
 
@@ -68,10 +80,17 @@ class SidebarWindow(QWidget):
     # ── Setup ────────────────────────────────────────────────────────
 
     def _setup_window_flags(self) -> None:
-        """Configura a janela para flutuar sem decoração no Wayland."""
+        """Configura as flags Wayland da sidebar.
+
+        A arquitetura multi-processo permite o uso seguro do BypassWindowManagerHint 
+        junto com ToolTip sem risco de herdar janelas pai erradas.
+        Essa combinação liberta a janela do "Smart Placement" do KWin e 
+        permite usar posicionamento X/Y absoluto de tela (evitando a centralização forçada).
+        """
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.Tool
+            Qt.WindowType.ToolTip
+            | Qt.WindowType.BypassWindowManagerHint
+            | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -139,9 +158,15 @@ class SidebarWindow(QWidget):
     # ── Helpers ──────────────────────────────────────────────────────
 
     def _screen_geometry(self) -> QRect:
-        screen = QApplication.primaryScreen()
-        assert screen is not None
-        return screen.geometry()
+        """Retorna a geometria disponível do monitor principal.
+
+        Usa QGuiApplication.primaryScreen() para leitura direta do hardware,
+        ignorando qualquer contexto de janela Qt ativa. availableGeometry()
+        exclui painéis/taskbar do KDE, garantindo posicionamento correto.
+        """
+        screen = QGuiApplication.primaryScreen()
+        assert screen is not None, "Nenhum monitor detectado"
+        return screen.availableGeometry()
 
     def _offscreen_rect(self) -> QRect:
         """Retângulo posicionado fora da tela (à direita)."""
@@ -180,13 +205,22 @@ class SidebarWindow(QWidget):
             return
         self._is_visible = True
 
+        off_rect = self._offscreen_rect()
+        on_rect = self._onscreen_rect()
+
         # Posiciona fora da tela ANTES de mostrar, para evitar flash visual
-        self.setGeometry(self._offscreen_rect())
+        self.setGeometry(off_rect)
         self.show()
 
+        # [WAYLAND/KWIN BYPASS]
+        # O KWin tem um bug agressivo de Smart Placement que pode sobrescrever a 
+        # geometria no exato instante em que o XDG Toplevel é mapeado.
+        # Empurrar a definição para o próximo ciclo de eventos anula isso.
+        QTimer.singleShot(50, lambda: self.setGeometry(off_rect))
+
         self._animation.stop()
-        self._animation.setStartValue(self._offscreen_rect())
-        self._animation.setEndValue(self._onscreen_rect())
+        self._animation.setStartValue(off_rect)
+        self._animation.setEndValue(on_rect)
         self._animation.start()
 
     def slide_out(self) -> None:

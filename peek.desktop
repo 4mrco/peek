@@ -1,0 +1,22 @@
+[Desktop Entry]
+Categories=Utility;Qt;
+Comment[pt_BR]=Quick system sidebar for KDE Plasma — media and volume controls
+Comment=Quick system sidebar for KDE Plasma — media and volume controls
+Exec=python3 /home/marco/Projetos/Kslide/main.py
+GenericName[pt_BR]=System Sidebar
+GenericName=System Sidebar
+Icon=preferences-system
+Keywords=sidebar;media;volume;plasma;
+MimeType=
+Name[pt_BR]=PEEK
+Name=PEEK
+NoDisplay=false
+Path=
+StartupNotify=false
+StartupWMClass=peek
+Terminal=false
+TerminalOptions=
+Type=Application
+Version=1.0
+X-KDE-SubstituteUID=false
+X-KDE-Username=

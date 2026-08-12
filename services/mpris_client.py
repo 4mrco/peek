@@ -72,6 +72,7 @@ class MprisClient(QObject):
         self._last_artist: str = ""
         self._last_art_url: str = ""
         self._last_is_playing: bool = False
+        self._last_track_id: str = ""  # ObjectPath MPRIS da faixa atual
 
         # Timer de fallback para redescoberta (não para polling de estado)
         self._rediscover_timer = QTimer(self)
@@ -213,6 +214,8 @@ class MprisClient(QObject):
             self._last_is_playing = False
             self.playback_state_changed.emit(False)
 
+        self._last_track_id = ""
+
         # Inicia redescoberta periódica
         self._rediscover_timer.start()
 
@@ -284,7 +287,11 @@ class MprisClient(QObject):
             if force_emit or art_url != self._last_art_url:
                 self._last_art_url = art_url
                 self.art_url_changed.emit(art_url)
-                
+
+            # ── Track ID (ObjectPath MPRIS) ───────────────────────────
+            # busctl retorna string pura do ObjectPath (ex: /com/spotify/track/...)
+            self._last_track_id = str(metadata.get("mpris:trackid", ""))
+
             length_us = metadata.get("mpris:length", 0)
             if isinstance(length_us, (int, float)):
                 self.duration_changed.emit(int(length_us))
@@ -376,6 +383,37 @@ class MprisClient(QObject):
     def previous_track(self) -> None:
         """Volta para a faixa anterior."""
         self._call_player_method("Previous")
+
+    @Slot(int)
+    def set_position(self, pos_s: int) -> None:
+        """Envia SetPosition via busctl com assinatura ox (ObjectPath + Int64).
+
+        Motivo do subprocess:
+        O PySide6 serializa int Python como D-Bus 'i' (Int32). A interface MPRIS
+        exige 'x' (Int64). A única forma confiável de garantir o tipo correto no
+        PySide6 é delegar ao busctl, que aceita a assinatura explícita 'ox'.
+        Overhead: ~5ms por chamada local, idêntico ao que já usamos no busctl de Metadata.
+        """
+        if not self._player_service or not self._last_track_id:
+            return
+
+        pos_us = pos_s * 1_000_000  # Converter segundos → microssegundos (Int64)
+        try:
+            subprocess.run(
+                [
+                    "busctl", "--user", "call",
+                    self._player_service,
+                    MPRIS_PATH,
+                    MPRIS_PLAYER_IFACE,
+                    "SetPosition", "ox",
+                    self._last_track_id,
+                    str(pos_us),
+                ],
+                capture_output=True,
+                timeout=2,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            print(f"[PEEK:MPRIS] Erro ao enviar SetPosition: {e}")
 
     def _call_player_method(self, method: str) -> None:
         """Chama um método void na interface do player MPRIS."""

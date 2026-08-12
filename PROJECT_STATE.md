@@ -286,8 +286,23 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 | #16.2  | Debug visual (bordas coloridas)        | ✅     |
 | #16.3  | Correção definitiva: geometria botões  | ✅     |
 | #16.4  | Ajuste fino: margens → botões imponentes | ✅   |
+| #17    | Bug Smash: Seek bar — diagnóstico e infra | ✅  |
+| #17.3  | Correção definitiva: MPRIS seek Int64 ox | ✅  |
+| #18    | Mega Update: Logger + Survival Timer + Control Center | ✅ |
+| #18.1  | Control Center Visibility & Single Instance (D-Bus Fix) | ✅ |
+| #18.2  | UX Polish: Wayland transient fix, toggle funcional, :pressed CSS | ✅ |
+| #18.3  | Wayland geometry fix: setTransientParent(None) + centralização | ✅ |
+| #18.4  | Early Severing: WA_NativeWindow + QGuiApplication.primaryScreen | ✅ |
+| #18.5  | Architecture Pivot: Multi-Process Wayland Fix (Daemon & GUI) | ✅ |
+| #18.6  | Wayland App ID Isolation & KWin Bypass (QTimer Move) | ✅ |
+| #18.7  | Wayland Absolute Positioning (Qt.ToolTip) & Debug Cleanup | ✅ |
+| #18.8  | Autonomous Wayland Fix: Transient Parent Anchor (1x1 Qt.Tool) | ✅ |
+| #18.9  | Phantom Anchor Full-Screen Geometry Match | ✅ |
+| #18.10 | Smart Logging & Pre-Phase 3 Polish | ✅ |
 
 ---
+
+> **Nota de Transição (Fase 3):** As otimizações estruturais do Wayland (Multi-Processo, IPC D-Bus e Âncora Transiente) foram concluídas com sucesso. O PEEK agora é blindado, roda em background autonomamente e possui um Control Center isolado. O projeto está estruturalmente maduro e pronto para iniciar a **Fase 3 (Subtle Menus)**, focada no clique com o botão direito para funcionalidades avançadas, e futuramente gravação global de atalhos.
 
 ## Backlog Futuro
 
