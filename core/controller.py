@@ -35,26 +35,27 @@ class Controller(QObject):
         # Workaround para Qt.ToolTip no Wayland: A sidebar precisa de uma janela
         # raiz real (xdg-toplevel) para agir como âncora (transient parent),
         # senão o QPA falha em mapear o popup ("Failed to create popup").
+        # SplashScreen: o protocolo XDG Wayland garante que splash screens
+        # nunca geram entrada na taskbar — sem fallback de gerenciamento.
         self._anchor = QWidget()
         self._anchor.setWindowFlags(
-            Qt.WindowType.Tool 
-            | Qt.WindowType.FramelessWindowHint 
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowTransparentForInput
         )
         self._anchor.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        # Permite que os cliques do mouse atravessem a janela invisível
         self._anchor.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._anchor.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
-        # Força a âncora a ter o tamanho exato da tela. 
+        # Força a âncora a ter o tamanho exato da tela.
         # Assim, quando o KWin a centralizar, o (0,0) local será o (0,0) global.
         screen_rect = QGuiApplication.primaryScreen().availableGeometry()
         self._anchor.setGeometry(screen_rect)
-        # Precisamos dar o show() para o compositor registrar a superfície
-        self._anchor.show()
+        self._anchor.hide()  # Inicia oculta no background (taskbar limpa)
 
         self._sidebar = SidebarWindow(self._anchor)
+        self._sidebar.hidden_fully.connect(self._anchor.hide)
         self._mpris = MprisClient(self)
-        self._art_downloader = ArtDownloader(self)
         self._art_downloader = ArtDownloader(self)
         self._audio = AudioClient(self)
         self._is_service_active: bool = True  # Estado do serviço (pode ser pausado via GUI)
@@ -139,6 +140,7 @@ class Controller(QObject):
             self._survival_timer.stop()
             self._sidebar.slide_out()
         else:
+            self._anchor.show()  # Mostra a âncora antes da animação
             self._sidebar.slide_in()
             self._survival_timer.start()  # Arma o timer de sobrevivência
 
@@ -148,6 +150,7 @@ class Controller(QObject):
         if not self._is_service_active:
             return
         self._hide_timer.stop()
+        self._anchor.show()  # Mostra a âncora antes da animação
         self._sidebar.slide_in()
         self._survival_timer.start()  # Arma o timer de sobrevivência
 

@@ -14,15 +14,13 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, Qt, Signal, Slot
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -45,9 +43,95 @@ _ACCENT_RED   = "#f38ba8"
 _RADIUS       = "12px"
 _RADIUS_SM    = "8px"
 
+# ── Custom Slide Switch ───────────────────────────────────────────────────
+
+class SlideSwitch(QWidget):
+    """Slide Switch estilo iOS desenhado via QPainter.
+
+    Emite o sinal ``toggled(bool)`` como um QCheckBox normal.
+    """
+
+    toggled = Signal(bool)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._checked: bool = False
+        self._thumb_x: float = 0.0  # 0.0 = esquerda, 1.0 = direita
+
+        self.setFixedSize(44, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self._anim = QPropertyAnimation(self, b"thumb_pos", self)
+        self._anim.setDuration(160)
+        self._anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+
+    # ── Signal helpers ────────────────────────────────────────────────
+    # O sinal Qt ``toggled`` é emitido automaticamente pelo toggle().
+    # Use switch.toggled.connect(callback) como qualquer QWidget.
+
+    # ── Property animada ──────────────────────────────────────────────
+    def _get_thumb_pos(self) -> float:
+        return self._thumb_x
+
+    def _set_thumb_pos(self, value: float) -> None:
+        self._thumb_x = value
+        self.update()
+
+    thumb_pos = Property(float, _get_thumb_pos, _set_thumb_pos)
+
+    # ── API pública ───────────────────────────────────────────────────
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, checked: bool) -> None:
+        if self._checked == checked:
+            return
+        self._checked = checked
+        self._animate_to(1.0 if checked else 0.0)
+
+    def toggle(self) -> None:
+        self._checked = not self._checked
+        self._animate_to(1.0 if self._checked else 0.0)
+        self.toggled.emit(self._checked)
+
+    # ── Eventos ───────────────────────────────────────────────────────
+    def mousePressEvent(self, event) -> None:
+        self.toggle()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w, h = self.width(), self.height()
+        r = h / 2
+        margin = 3
+        thumb_d = h - 2 * margin  # diâmetro da bolinha
+
+        # ── Track (fundo) ─────────────────────────────────────────────
+        track_color = QColor("#cba6f7") if self._checked else QColor("#313244")
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(track_color)
+        p.drawRoundedRect(0, 0, w, h, r, r)
+
+        # ── Thumb (bolinha) ───────────────────────────────────────────
+        travel = w - 2 * margin - thumb_d
+        thumb_x = int(margin + self._thumb_x * travel)
+        thumb_y = margin
+        p.setBrush(QColor("#ffffff"))
+        p.drawEllipse(thumb_x, thumb_y, thumb_d, thumb_d)
+
+        p.end()
+
+    # ── Animação ──────────────────────────────────────────────────────
+    def _animate_to(self, target: float) -> None:
+        self._anim.stop()
+        self._anim.setStartValue(self._thumb_x)
+        self._anim.setEndValue(target)
+        self._anim.start()
 
 class ControlCenter(QWidget):
     """Janela de configurações e diagnóstico do PEEK."""
+
 
     def __init__(self, parent: QWidget | None = None) -> None:
         # parent=None é crítico: impede que o Wayland herde geometria de
@@ -72,12 +156,14 @@ class ControlCenter(QWidget):
 
     def _setup_window(self) -> None:
         self.setWindowTitle("PEEK — Control Center")
-        self.setMinimumSize(460, 540)
+        self.setMinimumWidth(460)
         self.setMaximumWidth(560)
         self.setStyleSheet(self._global_stylesheet())
         # Qt.Window garante janela de topo raiz independente no Wayland.
         # WindowCloseButtonHint mantém o botão ✕ nativo.
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint)
+        # ShrinkToFit: deixa o layout controlar o tamanho da janela completamente.
+        self.layout().setSizeConstraint(self.layout().SizeConstraint.SetFixedSize) if self.layout() else None
 
     def showEvent(self, event) -> None:  # noqa: N802
         """Centraliza na tela e corta o parentesco transiente nativo.
@@ -109,6 +195,9 @@ class ControlCenter(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(20)
+        # SetFixedSize: proíbe espaço vazio — janela esmaga/expande automaticamente
+        # no frame exato em que um widget filho recebe .hide() ou .show().
+        root.setSizeConstraint(root.SizeConstraint.SetFixedSize)
 
         # ── Header ──────────────────────────────────────────────────────
         root.addLayout(self._build_header())
@@ -149,8 +238,10 @@ class ControlCenter(QWidget):
         layout.addLayout(title_col)
         layout.addStretch()
 
-        self._status_badge = QLabel("● ATIVO")
-        self._status_badge.setObjectName("badgeActive")
+        self._status_badge = QLabel("●")
+        self._status_badge.setObjectName("ledStatusActive")
+        self._status_badge.setFixedSize(16, 16)
+        self._status_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._status_badge)
 
         return layout
@@ -180,8 +271,7 @@ class ControlCenter(QWidget):
         row.addLayout(desc_col)
         row.addStretch()
 
-        self._service_toggle = QCheckBox()
-        self._service_toggle.setObjectName("toggleSwitch")
+        self._service_toggle = SlideSwitch()
         self._service_toggle.setChecked(True)
         self._service_toggle.toggled.connect(self._on_service_toggled)
         row.addWidget(self._service_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -226,13 +316,26 @@ class ControlCenter(QWidget):
         layout = QVBoxLayout(card)
         layout.setSpacing(12)
 
-        # Header da seção com botão de refresh
+        # Header da seção com LED de saúde, botão expandir e botão refresh
         header_row = QHBoxLayout()
 
         lbl = QLabel("DIAGNÓSTICO")
         lbl.setObjectName("sectionLabel")
         header_row.addWidget(lbl)
+
+        # LED de saúde — colorido via CSS / objectName dinâmico
+        self._health_led = QLabel("●")
+        self._health_led.setObjectName("ledOk")
+        header_row.addWidget(self._health_led)
+
         header_row.addStretch()
+
+        # Botão expandir/recolher log
+        self._toggle_log_btn = QPushButton("Mostrar Log")
+        self._toggle_log_btn.setObjectName("btnRefresh")
+        self._toggle_log_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._toggle_log_btn.clicked.connect(self._toggle_log_view)
+        header_row.addWidget(self._toggle_log_btn)
 
         self._refresh_btn = QPushButton("↻ Atualizar")
         self._refresh_btn.setObjectName("btnRefresh")
@@ -242,17 +345,16 @@ class ControlCenter(QWidget):
 
         layout.addLayout(header_row)
 
-        # Área de texto para os logs
+        # Área de texto para os logs (começa oculta)
         self._log_view = QTextEdit()
         self._log_view.setObjectName("logView")
         self._log_view.setReadOnly(True)
         self._log_view.setFont(QFont("JetBrains Mono, Monospace", 9))
-        self._log_view.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
+        self._log_view.setFixedHeight(160)
+        self._log_view.hide()  # Começa recolhido
         layout.addWidget(self._log_view)
 
-        # Carrega os logs na construção
+        # Carrega os logs (e define a cor do LED)
         self._load_logs()
 
         return card
@@ -261,7 +363,7 @@ class ControlCenter(QWidget):
         layout = QHBoxLayout()
         layout.setSpacing(12)
 
-        version = QLabel("PEEK v0.1 — KDE Plasma · Wayland")
+        version = QLabel("PEEK v0.2 — KDE Plasma · Wayland")
         version.setObjectName("footerText")
         layout.addWidget(version)
         layout.addStretch()
@@ -284,13 +386,14 @@ class ControlCenter(QWidget):
 
     @Slot()
     def _load_logs(self) -> None:
-        """Lê as últimas 50 linhas do peek.log e exibe no log_view."""
+        """Lê as últimas 50 linhas do peek.log, exibe no log_view e atualiza o LED."""
         path = Path(LOG_PATH)
         if not path.exists():
             self._log_view.setPlainText(
                 f"[PEEK] Arquivo de log não encontrado em:\n{path}\n\n"
                 "Execute o PEEK ao menos uma vez para gerar o log."
             )
+            self._set_led("ok")
             return
 
         try:
@@ -301,19 +404,41 @@ class ControlCenter(QWidget):
             self._log_view.verticalScrollBar().setValue(
                 self._log_view.verticalScrollBar().maximum()
             )
+            # Atualiza a cor do LED baseada no conteúdo
+            combined = last_50.lower()
+            if "traceback" in combined or "error" in combined or "exception" in combined:
+                self._set_led("error")
+            elif "warning" in combined or "warn" in combined or "aviso" in combined:
+                self._set_led("warn")
+            else:
+                self._set_led("ok")
         except OSError as e:
             self._log_view.setPlainText(f"[Erro ao ler log]: {e}")
+            self._set_led("error")
+
+    def _set_led(self, state: str) -> None:
+        """Atualiza o LED de saúde (ok / warn / error)."""
+        names = {"ok": "ledOk", "warn": "ledWarn", "error": "ledError"}
+        self._health_led.setObjectName(names.get(state, "ledOk"))
+        self._health_led.style().unpolish(self._health_led)
+        self._health_led.style().polish(self._health_led)
+
+    @Slot()
+    def _toggle_log_view(self) -> None:
+        """Expande/recolhe o painel de log e ajusta o tamanho da janela."""
+        visible = self._log_view.isVisible()
+        self._log_view.setVisible(not visible)
+        self._toggle_log_btn.setText("Ocultar Log" if not visible else "Mostrar Log")
+        # SetFixedSize no layout garante que a janela encolhe/expande automaticamente.
 
     @Slot(bool)
     def _on_service_toggled(self, active: bool) -> None:
-        """Atualiza o badge de status e envia ordem D-Bus para o Daemon."""
+        """Atualiza o LED de status e envia ordem D-Bus para o Daemon."""
         self._service_active = active
         if active:
-            self._status_badge.setText("● ATIVO")
-            self._status_badge.setObjectName("badgeActive")
+            self._status_badge.setObjectName("ledStatusActive")
         else:
-            self._status_badge.setText("● PAUSADO")
-            self._status_badge.setObjectName("badgePaused")
+            self._status_badge.setObjectName("ledStatusPaused")
         # Força repintura do QSS (mudou objectName)
         self._status_badge.style().unpolish(self._status_badge)
         self._status_badge.style().polish(self._status_badge)
@@ -351,23 +476,19 @@ class ControlCenter(QWidget):
                 font-size: 12px;
             }}
 
-            /* ── Badges ── */
-            #badgeActive {{
+            /* ── LED de Status (cabeçalho) ── */
+            #ledStatusActive {{
                 color: {_ACCENT_GREEN};
-                font-size: 12px;
-                font-weight: bold;
-                padding: 4px 10px;
-                border-radius: {_RADIUS_SM};
-                background-color: rgba(166, 227, 161, 0.15);
+                font-size: 16px;
+                border-radius: 8px;
             }}
-            #badgePaused {{
+            #ledStatusPaused {{
                 color: {_ACCENT_RED};
-                font-size: 12px;
-                font-weight: bold;
-                padding: 4px 10px;
-                border-radius: {_RADIUS_SM};
-                background-color: rgba(243, 139, 168, 0.15);
+                font-size: 16px;
+                border-radius: 8px;
             }}
+
+            /* ── Badges ── */
             #badgeSoon {{
                 color: {_TEXT_MUTED};
                 font-size: 11px;
@@ -405,21 +526,42 @@ class ControlCenter(QWidget):
                 font-family: 'JetBrains Mono', 'Monospace';
             }}
 
-            /* ── Toggle ── */
+            /* ── Toggle Slide Switch ── */
             #toggleSwitch {{
-                width: 20px;
-                height: 20px;
+                width: 44px;
+                height: 24px;
+                padding: 0px;
             }}
             #toggleSwitch::indicator {{
-                width: 20px;
-                height: 20px;
-                border-radius: 6px;
-                border: 2px solid {_BG_OVERLAY};
+                width: 44px;
+                height: 24px;
+                border-radius: 12px;
+                border: none;
+                background-color: {_BG_OVERLAY};
+                image: none;
+            }}
+            #toggleSwitch::indicator:unchecked {{
                 background-color: {_BG_OVERLAY};
             }}
             #toggleSwitch::indicator:checked {{
                 background-color: {_ACCENT_MAUVE};
-                border-color: {_ACCENT_MAUVE};
+            }}
+
+            /* ── LED de Saúde ── */
+            #ledOk {{
+                color: {_ACCENT_GREEN};
+                font-size: 10px;
+                padding-left: 6px;
+            }}
+            #ledWarn {{
+                color: #f9e2af;
+                font-size: 10px;
+                padding-left: 6px;
+            }}
+            #ledError {{
+                color: {_ACCENT_RED};
+                font-size: 10px;
+                padding-left: 6px;
             }}
 
             /* ── Separador ── */

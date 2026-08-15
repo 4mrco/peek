@@ -2,6 +2,7 @@
 
 import signal
 import sys
+from pathlib import Path
 
 # O logger.py será acionado de forma inteligente pelo roteamento Multi-Processo
 from core.logger import setup_logging
@@ -63,7 +64,7 @@ def main() -> int:
     # ── PROCESSO 1: DAEMON (Sidebar) ──
     log_path = setup_logging(is_daemon=True)
     app.setApplicationName("peek-daemon")
-    app.setDesktopFileName("peek-daemon")
+    
     print(f"[PEEK:Daemon] Sessão iniciada. Log: {log_path}")
 
     controller = Controller()

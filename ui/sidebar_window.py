@@ -41,6 +41,7 @@ class SidebarWindow(QWidget):
 
     mouse_entered = Signal()
     mouse_left = Signal()
+    hidden_fully = Signal()
     app_volume_changed = Signal(int, int)
 
     WIDTH: int = 360
@@ -273,9 +274,10 @@ class SidebarWindow(QWidget):
                 self._mixer_layout.addWidget(slider, 0, Qt.AlignmentFlag.AlignVCenter)
 
     def _on_animation_finished(self) -> None:
-        """Esconde a janela depois da animação de saída."""
+        """Esconde a janela depois da animação de saída e sinaliza o controlador."""
         if not self._is_visible:
             self.hide()
+            self.hidden_fully.emit()
 
     def enterEvent(self, event: QEnterEvent) -> None:  # noqa: N802
         self.mouse_entered.emit()

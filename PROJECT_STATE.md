@@ -299,6 +299,15 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 | #18.8  | Autonomous Wayland Fix: Transient Parent Anchor (1x1 Qt.Tool) | ✅ |
 | #18.9  | Phantom Anchor Full-Screen Geometry Match | ✅ |
 | #18.10 | Smart Logging & Pre-Phase 3 Polish | ✅ |
+| #18.11 | Final Pre-Commit Code Audit (imports, prints) | ✅ |
+| #19.1  | UI Polish: Slide Switch, LED Diagnóstico, Log Colapsável, v0.2 | ✅ |
+| #19.2  | Custom Paint SlideSwitch + Exorcismo Definitivo da Âncora | ✅ |
+| #19.3  | Shrink Bug Fix, LED Status Minimalista, Ghost Hunting (desktopFileName="") | ✅ |
+| #19.4  | Brute Force Fixes: SetFixedSize + SplashScreen Protocol | ✅ |
+| #19.5  | Desktop Entry Bypass: peek-daemon-ghost.desktop (NoDisplay=true) | ✅ |
+| #19.6  | KDE Taskbar Clone Wars Fix: X-KDE-SkipTaskbar=true in .desktop | ✅ |
+| #19.7  | Revert 1x1 Anchor Disaster & Plasmashell Spoofing | ✅ |
+| #19.8  | The KISS Principle: Dynamic Show/Hide Anchor Sync | ✅ |
 
 ---
 
