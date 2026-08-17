@@ -11,11 +11,12 @@ Design: Catppuccin Mocha — consistente com a sidebar.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -202,10 +203,13 @@ class ControlCenter(QWidget):
         # ── Header ──────────────────────────────────────────────────────
         root.addLayout(self._build_header())
 
-        # ── Card: Serviço ────────────────────────────────────────────────
+        # ── Card: Serviço ─────────────────────────────────────────────────────
         root.addWidget(self._build_service_card())
 
-        # ── Card: Atalho (placeholder) ───────────────────────────────────
+        # ── Card: Autostart ────────────────────────────────────────────────
+        root.addWidget(self._build_autostart_card())
+
+        # ── Card: Atalho ─────────────────────────────────────────────────────
         root.addWidget(self._build_shortcut_card())
 
         # ── Card: Diagnóstico / Logs ──────────────────────────────────────
@@ -296,19 +300,59 @@ class ControlCenter(QWidget):
         name.setObjectName("settingName")
         desc_col.addWidget(name)
 
-        desc = QLabel("Atalho global para mostrar a sidebar")
+        desc = QLabel("Atalho global via KDE (Wayland)")
         desc.setObjectName("settingDesc")
         desc_col.addWidget(desc)
 
         row.addLayout(desc_col)
         row.addStretch()
 
-        badge = QLabel("Gravar Atalho (Em breve)")
-        badge.setObjectName("badgeSoon")
-        row.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._shortcut_btn = QPushButton("⌨ Configurar no KDE")
+        self._shortcut_btn.setObjectName("btnShortcut")
+        self._shortcut_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._shortcut_btn.clicked.connect(self._on_configure_shortcut)
+        row.addWidget(self._shortcut_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         layout.addLayout(row)
 
+        # Dica de como usar
+        hint = QLabel("Clique para copiar o comando D-Bus e abrir as configurações do KDE.")
+        hint.setObjectName("infoText")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        return card
+
+    def _build_autostart_card(self) -> QFrame:
+        """Card de Autostart com padrão XDG (arquivo .desktop em ~/.config/autostart)."""
+        card = self._make_card()
+        layout = QVBoxLayout(card)
+        layout.setSpacing(16)
+
+        lbl = QLabel("INICIALIZAÇÃO")
+        lbl.setObjectName("sectionLabel")
+        layout.addWidget(lbl)
+
+        row = QHBoxLayout()
+        desc_col = QVBoxLayout()
+
+        name = QLabel("Iniciar com o sistema")
+        name.setObjectName("settingName")
+        desc_col.addWidget(name)
+
+        desc = QLabel("Inicia o PEEK automaticamente com o KDE (XDG Autostart)")
+        desc.setObjectName("settingDesc")
+        desc_col.addWidget(desc)
+
+        row.addLayout(desc_col)
+        row.addStretch()
+
+        self._autostart_toggle = SlideSwitch()
+        self._autostart_toggle.setChecked(self._is_autostart_enabled())
+        self._autostart_toggle.toggled.connect(self._on_autostart_toggled)
+        row.addWidget(self._autostart_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        layout.addLayout(row)
         return card
 
     def _build_logs_card(self) -> QFrame:
@@ -375,6 +419,97 @@ class ControlCenter(QWidget):
         layout.addWidget(close_btn)
 
         return layout
+
+    # ── Autostart ─────────────────────────────────────────────────────────
+
+    _AUTOSTART_DIR  = Path.home() / ".config" / "autostart"
+    _AUTOSTART_FILE = _AUTOSTART_DIR / "peek-autostart.desktop"
+
+    @staticmethod
+    def _is_autostart_enabled() -> bool:
+        """Verifica se o arquivo XDG Autostart existe."""
+        return ControlCenter._AUTOSTART_FILE.exists()
+
+    @Slot(bool)
+    def _on_autostart_toggled(self, enabled: bool) -> None:
+        """Cria ou remove o arquivo XDG Autostart."""
+        if enabled:
+            self._AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
+            # Descobre o caminho absoluto do main.py dinamicamente.
+            main_py = Path(os.path.abspath(__file__)).parent.parent / "main.py"
+            self._AUTOSTART_FILE.write_text(
+                "[Desktop Entry]\n"
+                "Type=Application\n"
+                "Name=Peek Daemon\n"
+                f"Exec=python3 {main_py} --daemon\n"
+                "NoDisplay=true\n"
+                "X-KDE-autostart-phase=2\n",
+                encoding="utf-8",
+            )
+        else:
+            self._AUTOSTART_FILE.unlink(missing_ok=True)
+
+    # ── Atalho / Shortcut ─────────────────────────────────────────────────
+
+    _DESKTOP_APPS_DIR = Path.home() / ".local" / "share" / "applications"
+    _DESKTOP_FILE     = _DESKTOP_APPS_DIR / "peek.desktop"
+
+    @Slot()
+    def _on_configure_shortcut(self) -> None:
+        """Gera o arquivo .desktop com Desktop Action nativa e abre o KDE Shortcut Manager.
+
+        O KDE reconhece nativamente a seção [Desktop Action ToggleSidebar] e
+        permite que o usuário associe qualquer tecla a ela sem criar "Comandos
+        Personalizados" — é a integração idiomática do FreeDesktop para atalhos.
+        """
+        self._write_desktop_file()
+
+        # Atualiza o cache de .desktop do KDE para que a ação apareça imediatamente
+        for kbuildsycoca in ("kbuildsycoca6", "kbuildsycoca5"):
+            try:
+                subprocess.Popen([kbuildsycoca, "--noincremental"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                break
+            except FileNotFoundError:
+                continue
+
+        # Abre o painel de atalhos do KDE
+        for cmd in (["kcmshell6", "keys"], ["systemsettings", "kcm_keys"]):
+            try:
+                subprocess.Popen(cmd)
+                break
+            except FileNotFoundError:
+                continue
+
+        # Instrução clara para o usuário (2s)
+        self._shortcut_btn.setText("Busque por PEEK na aba Aplicativos!")
+        self._shortcut_btn.setEnabled(False)
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(3000, self._restore_shortcut_btn)
+
+    def _write_desktop_file(self) -> None:
+        """Cria/sobrescreve ~/.local/share/applications/peek.desktop com Desktop Actions."""
+        self._DESKTOP_APPS_DIR.mkdir(parents=True, exist_ok=True)
+        main_py = Path(os.path.abspath(__file__)).parent.parent / "main.py"
+        self._DESKTOP_FILE.write_text(
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            "Name=PEEK Control Center\n"
+            f"Exec=python3 {main_py}\n"
+            "Icon=preferences-system\n"
+            "Categories=Utility;\n"
+            "Actions=ToggleSidebar;\n"
+            "\n"
+            "[Desktop Action ToggleSidebar]\n"
+            "Name=Abrir ou Fechar PEEK (Sidebar)\n"
+            "Exec=qdbus org.peek.App /App Toggle\n",
+            encoding="utf-8",
+        )
+
+    @Slot()
+    def _restore_shortcut_btn(self) -> None:
+        self._shortcut_btn.setText("⌨ Configurar no KDE")
+        self._shortcut_btn.setEnabled(True)
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -612,6 +747,28 @@ class ControlCenter(QWidget):
                 background-color: #2a2a3c;
                 padding-top: 8px;
                 padding-bottom: 6px;
+            }}
+            #btnShortcut {{
+                background-color: rgba(203, 166, 247, 0.15);
+                color: {_ACCENT_MAUVE};
+                border: 1px solid rgba(203, 166, 247, 0.35);
+                border-radius: {_RADIUS_SM};
+                padding: 6px 14px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            #btnShortcut:hover {{
+                background-color: rgba(203, 166, 247, 0.28);
+            }}
+            #btnShortcut:pressed {{
+                background-color: rgba(203, 166, 247, 0.12);
+                padding-top: 7px;
+                padding-bottom: 5px;
+            }}
+            #btnShortcut:disabled {{
+                background-color: rgba(166, 227, 161, 0.15);
+                color: {_ACCENT_GREEN};
+                border-color: rgba(166, 227, 161, 0.35);
             }}
 
             /* ── Footer ── */

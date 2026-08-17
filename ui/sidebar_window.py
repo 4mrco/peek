@@ -22,6 +22,7 @@ from PySide6.QtCore import (
     QEasingCurve,
     QEvent,
     QPropertyAnimation,
+    QPoint,
     QRect,
     Qt,
     QTimer,
@@ -29,7 +30,7 @@ from PySide6.QtCore import (
     Slot
 )
 from PySide6.QtGui import QEnterEvent, QGuiApplication
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFrame
+from PySide6.QtWidgets import QHBoxLayout, QLayout, QVBoxLayout, QWidget, QFrame
 from typing import Any
 
 from ui.components.media_player import MediaPlayerWidget
@@ -170,32 +171,41 @@ class SidebarWindow(QWidget):
         return screen.availableGeometry()
 
     def _offscreen_rect(self) -> QRect:
-        """Retângulo posicionado fora da tela (à direita)."""
-        geo = self._screen_geometry()
-        
-        # Garante que os widgets estão calculados
-        self.adjustSize()
-        content_height = self.sizeHint().height()
+        """Retângulo posicionado fora da tela (à direita).
 
+        SetFixedSize trava a janela ao tamanho exato do layout, impedindo
+        o "gap transparente" que causava leaveEvent falso na borda direita.
+        """
+        if (self.layout() and
+                self.layout().sizeConstraint() != QLayout.SizeConstraint.SetFixedSize):
+            self.layout().setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+        geo = self._screen_geometry()
+        w   = self.sizeHint().width()
+        h   = self.sizeHint().height()
+        parent_pos = self.parentWidget().pos() if self.parentWidget() else QPoint(0, 0)
         return QRect(
-            geo.x() + geo.width(),
-            geo.y(),
-            self.WIDTH,
-            content_height,
+            geo.x() + geo.width() - parent_pos.x(),
+            geo.y() - parent_pos.y(),
+            w, h,
         )
 
     def _onscreen_rect(self) -> QRect:
-        """Retângulo posicionado dentro da tela (borda direita)."""
-        geo = self._screen_geometry()
-        
-        self.adjustSize()
-        content_height = self.sizeHint().height()
+        """Retângulo posicionado na borda direita da tela.
 
+        O crescimento dinâmico (novos sliders) expande para a esquerda,
+        mantendo a borda direita colada na margem da tela.
+        """
+        if (self.layout() and
+                self.layout().sizeConstraint() != QLayout.SizeConstraint.SetFixedSize):
+            self.layout().setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+        geo = self._screen_geometry()
+        w   = self.sizeHint().width()
+        h   = self.sizeHint().height()
+        parent_pos = self.parentWidget().pos() if self.parentWidget() else QPoint(0, 0)
         return QRect(
-            geo.x() + geo.width() - self.WIDTH,
-            geo.y(),
-            self.WIDTH,
-            content_height,
+            geo.x() + geo.width() - w - parent_pos.x(),
+            geo.y() - parent_pos.y(),
+            w, h,
         )
 
     # ── Public API ───────────────────────────────────────────────────
@@ -278,6 +288,22 @@ class SidebarWindow(QWidget):
         if not self._is_visible:
             self.hide()
             self.hidden_fully.emit()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        """Reancora a borda direita quando o layout expande dinamicamente.
+
+        Só age quando o painel está visível e a animação não está rodando,
+        evitando conflito com os setGeometry() frame-a-frame da QPropertyAnimation.
+        """
+        super().resizeEvent(event)
+        if not getattr(self, '_is_visible', False):
+            return
+        if hasattr(self, '_animation') and self._animation.state() == self._animation.State.Running:
+            return
+        geo        = self._screen_geometry()
+        parent_pos = self.parentWidget().pos() if self.parentWidget() else QPoint(0, 0)
+        new_x      = geo.x() + geo.width() - self.width() - parent_pos.x()
+        self.move(new_x, self.y())
 
     def enterEvent(self, event: QEnterEvent) -> None:  # noqa: N802
         self.mouse_entered.emit()

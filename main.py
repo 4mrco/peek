@@ -2,6 +2,7 @@
 
 import signal
 import sys
+import os
 from pathlib import Path
 
 # O logger.py será acionado de forma inteligente pelo roteamento Multi-Processo
@@ -32,12 +33,22 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    # ── FLAG --daemon: modo silencioso para XDG Autostart ─────────────────
+    # Discord, Telegram e similares usam este padrão: o arquivo .desktop do
+    # autostart passa --daemon para silenciar a GUI no boot.
+    daemon_mode = "--daemon" in sys.argv
+
     # ── ROTEAMENTO MULTI-PROCESSO (Wayland Isolation) ─────────────────
     # No Wayland, KWin agrupa as janelas por Process ID / QApplication.
     # Para a Sidebar não ser amarrada à GUI, precisamos de dois processos.
 
     if _is_service_registered(DBUS_SERVICE):
         # ── PROCESSO 2: GUI CLIENT ──
+        # Só abre a GUI se não estivermos em modo --daemon.
+        if daemon_mode:
+            print("[PEEK] Daemon já rodando. Flag --daemon ignorada (não abre GUI).")
+            return 0
+
         log_path = setup_logging(is_daemon=False)
         app.setApplicationName("peek-gui")
         app.setDesktopFileName("peek-gui")
@@ -70,10 +81,11 @@ def main() -> int:
     controller = Controller()
     controller.start()
 
-    # Primeira execução: nós abrimos a GUI para o usuário ver que funcionou.
-    # Mas como queremos isolamento (Multi-Processo), abrimos DE FORA deste PID.
-    print("[PEEK:Daemon] Lançando subprocesso da GUI...")
-    subprocess.Popen([sys.executable, sys.argv[0]])
+    # Só abre a GUI automaticamente na primeira execução normal (sem --daemon).
+    # No boot via autostart, não queremos a janela de configurações na cara do usuário.
+    if not daemon_mode:
+        print("[PEEK:Daemon] Lançando subprocesso da GUI...")
+        subprocess.Popen([sys.executable, sys.argv[0]])
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     return app.exec()

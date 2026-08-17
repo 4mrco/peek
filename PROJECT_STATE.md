@@ -308,6 +308,10 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 | #19.6  | KDE Taskbar Clone Wars Fix: X-KDE-SkipTaskbar=true in .desktop | ✅ |
 | #19.7  | Revert 1x1 Anchor Disaster & Plasmashell Spoofing | ✅ |
 | #19.8  | The KISS Principle: Dynamic Show/Hide Anchor Sync | ✅ |
+| #20    | XDG Autostart, --daemon flag & Shortcut UI ("Configurar no KDE") | ✅ |
+| #20.1  | Native KDE Shortcut: FreeDesktop Desktop Actions (.desktop file + kbuildsycoca6) | ✅ |
+| #21    | Dynamic Width Right-Anchor Fix (resizeEvent + sizeHint width) | ✅ |
+| #21.1  | Ghost Gap & Edge Trigger Fix (SetFixedSize + parent_pos offset) | ✅ |
 
 ---
 
