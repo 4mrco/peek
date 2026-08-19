@@ -80,7 +80,7 @@ class Controller(QObject):
         self._sidebar.mouse_left.connect(self._schedule_hide)
         self._hide_timer.timeout.connect(self._do_slide_out)
 
-        # MPRIS serviço → UI
+        # MPRIS serviço → UI (Conectados! O fluxo está ativo)
         media = self._sidebar.media_player
         self._mpris.track_changed.connect(media.update_track)
         self._mpris.playback_state_changed.connect(media.update_playback_state)
@@ -99,15 +99,18 @@ class Controller(QObject):
         media.previous_clicked.connect(self._mpris.previous_track)
         media.seek_requested.connect(self._mpris.set_position)
 
-        # Audio serviço → UI (volume master)
+        # Audio (Backend) → UI
         vol_slider = self._sidebar.volume_slider
-        # Audio (Backend) -> UI
         self._audio.master_volume_changed.connect(vol_slider.set_volume)
         self._audio.app_volumes_changed.connect(self._sidebar.update_app_sliders)
+        self._audio.mic_mute_changed.connect(self._sidebar.on_mic_mute_changed)
 
-        # UI -> Audio (Backend)
+        # UI → Audio (Backend)
         vol_slider.volume_changed.connect(self._audio.set_master_volume)
         self._sidebar.app_volume_changed.connect(self._audio.set_app_volume)
+        self._sidebar.app_mute_toggled.connect(self._audio.toggle_stream_mute)
+        self._sidebar.mic_mute_requested.connect(self._audio.toggle_mic_mute)
+        self._sidebar.output_cycle_requested.connect(self._audio.cycle_default_sink)
         
         # Força o MPRIS a popular a UI após todas as conexões terem sido feitas
         self._mpris.force_sync_ui()

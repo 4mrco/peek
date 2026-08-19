@@ -312,6 +312,17 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 | #20.1  | Native KDE Shortcut: FreeDesktop Desktop Actions (.desktop file + kbuildsycoca6) | ✅ |
 | #21    | Dynamic Width Right-Anchor Fix (resizeEvent + sizeHint width) | ✅ |
 | #21.1  | Ghost Gap & Edge Trigger Fix (SetFixedSize + parent_pos offset) | ✅ |
+| #22    | Audio Interactivity: ClickableIcon, App Mute Toggle, Global Controls (Mic+Speaker) | ✅ |
+| #22.1  | Wire Up Native PulseAudio Mute (toggle_stream_mute + toggle_mic_mute) | ✅ |
+| #22.2  | Visual Mute Feedback (QGraphicsOpacityEffect + mic icon swap + speaker icon fix) | ✅ |
+| #22.3  | Bugfix: MPRIS Regression (Int64 busctl) & Optimistic UI for Mute & Tooltips | ✅ |
+| #22.4  | Bugfix: UI Wiring, repaint() injection & Controller check | ✅ |
+| #23    | Workspace Cleanup & Audio Routing (cycle_default_sink) | ✅ |
+| #24    | Universal MPRIS Support (Dynamic Discovery & Identity Extraction) | ✅ |
+| #24.1  | Bugfix: DBus Disconnect Signature & UI Sync | ✅ |
+| #25    | Clickable Player Header & Chevron | ✅ |
+| #25.1  | UI Polish & MPRIS Extrapolation (No Polling) | ✅ |
+| #25.2  | Pixel Perfect: Layout Alignment & Spacing | ✅ |
 
 ---
 

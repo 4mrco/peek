@@ -16,6 +16,8 @@ Sinais emitidos (thread-safe via Qt::QueuedConnection automático):
 Slots para a UI:
   - set_master_volume(int)      — define volume do sink principal.
   - toggle_master_mute()        — alterna mute do sink principal.
+  - toggle_stream_mute(index)   — alterna mute de um sink input específico.
+  - toggle_mic_mute()           — alterna mute da source padrão (microfone).
 """
 
 from __future__ import annotations
@@ -41,8 +43,9 @@ class _AudioWorker(QObject):
     """
 
     master_volume_changed = Signal(int)
-    master_mute_changed = Signal(bool)
-    app_volumes_changed = Signal(list)
+    master_mute_changed   = Signal(bool)
+    app_volumes_changed   = Signal(list)
+    mic_mute_changed      = Signal(bool)  # estado de mute do microfone padrão
 
     def __init__(self) -> None:
         super().__init__()
@@ -50,9 +53,10 @@ class _AudioWorker(QObject):
         self._timer: QTimer | None = None
 
         # Cache para só emitir quando mudar
-        self._last_master_vol: int = -1
-        self._last_master_mute: bool | None = None
-        self._last_apps: list[dict[str, Any]] = []
+        self._last_master_vol:  int            = -1
+        self._last_master_mute: bool | None    = None
+        self._last_apps:        list[dict[str, Any]] = []
+        self._last_mic_mute:    bool | None    = None
 
     @Slot()
     def start(self) -> None:
@@ -93,6 +97,7 @@ class _AudioWorker(QObject):
         try:
             self._poll_master()
             self._poll_apps()
+            self._poll_mic()
         except Exception:
             print(f"[PEEK:Audio] Erro no polling:")
             traceback.print_exc()
@@ -154,6 +159,22 @@ class _AudioWorker(QObject):
             self._last_apps = apps
             self.app_volumes_changed.emit(apps)
 
+    def _poll_mic(self) -> None:
+        """Lê o estado de mute da source padrão (microfone)."""
+        assert self._pulse is not None
+        try:
+            server_info = self._pulse.server_info()
+            default_src = server_info.default_source_name
+            for src in self._pulse.source_list():
+                if src.name == default_src:
+                    muted = bool(src.mute)
+                    if muted != self._last_mic_mute:
+                        self._last_mic_mute = muted
+                        self.mic_mute_changed.emit(muted)
+                    break
+        except Exception:
+            pass  # source pode não estar disponível em todos os sistemas
+
     # ── Métodos chamados da thread principal (via slots) ─────────────
 
     @Slot(int)
@@ -200,6 +221,69 @@ class _AudioWorker(QObject):
         except Exception as e:
             print(f"[PEEK:Audio] Erro ao definir volume do app {index}: {e}")
 
+    @Slot(int)
+    def toggle_stream_mute(self, index: int) -> None:
+        """Alterna o mute de um sink input específico pelo index."""
+        try:
+            with pulsectl.Pulse('peek-mute-writer') as p:
+                for si in p.sink_input_list():
+                    if si.index == index:
+                        p.mute(si, not bool(si.mute))
+                        break
+        except Exception as e:
+            print(f"[PEEK:Audio] Erro ao alternar mute do stream {index}: {e}")
+
+    @Slot()
+    def toggle_mic_mute(self) -> None:
+        """Alterna o mute da source padrão (microfone)."""
+        try:
+            with pulsectl.Pulse('peek-mic-writer') as p:
+                server_info = p.server_info()
+                default_src = server_info.default_source_name
+                for src in p.source_list():
+                    if src.name == default_src:
+                        p.mute(src, not bool(src.mute))
+                        break
+        except Exception as e:
+            print(f"[PEEK:Audio] Erro ao alternar mute do mic: {e}")
+
+    @Slot()
+    def cycle_default_sink(self) -> None:
+        """Alterna a saída de áudio para o próximo Sink disponível e move os streams ativos."""
+        try:
+            with pulsectl.Pulse('peek-route-writer') as p:
+                sinks = p.sink_list()
+                if len(sinks) <= 1:
+                    return
+
+                server_info = p.server_info()
+                current_default = server_info.default_sink_name
+
+                # Encontra o index do Sink atual na lista
+                current_idx = -1
+                for i, sink in enumerate(sinks):
+                    if sink.name == current_default:
+                        current_idx = i
+                        break
+
+                # Próximo Sink na lista (circular)
+                next_idx = (current_idx + 1) % len(sinks)
+                next_sink = sinks[next_idx]
+
+                # Define como padrão
+                p.default_set(next_sink)
+
+                # Move todos os Sink Inputs ativos para o novo Sink
+                for si in p.sink_input_list():
+                    try:
+                        p.sink_input_move(si.index, next_sink.index)
+                    except Exception as e:
+                        print(f"[PEEK:Audio] Erro ao mover stream {si.index} para sink {next_sink.index}: {e}")
+
+                print(f"[PEEK:Audio] Saída de áudio alterada para: {next_sink.description}")
+        except Exception as e:
+            print(f"[PEEK:Audio] Erro ao alternar a saída de áudio: {e}")
+
 
 class AudioClient(QObject):
     """Proxy thread-safe para o worker de áudio.
@@ -211,8 +295,9 @@ class AudioClient(QObject):
 
     # Sinais re-expostos do worker (para o Controller conectar à UI)
     master_volume_changed = Signal(int)
-    master_mute_changed = Signal(bool)
-    app_volumes_changed = Signal(list)
+    master_mute_changed   = Signal(bool)
+    app_volumes_changed   = Signal(list)
+    mic_mute_changed      = Signal(bool)  # estado de mute do microfone
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -227,6 +312,7 @@ class AudioClient(QObject):
         self._worker.master_volume_changed.connect(self.master_volume_changed)
         self._worker.master_mute_changed.connect(self.master_mute_changed)
         self._worker.app_volumes_changed.connect(self.app_volumes_changed)
+        self._worker.mic_mute_changed.connect(self.mic_mute_changed)
 
         # Thread lifecycle
         self._thread.started.connect(self._worker.start)
@@ -254,6 +340,21 @@ class AudioClient(QObject):
         """Define o volume de um aplicativo pelo index (0-100). Thread-safe."""
         # Invoca via metacall para garantir thread-safety
         self._worker.set_app_volume(index, value)
+
+    @Slot(int)
+    def toggle_stream_mute(self, index: int) -> None:
+        """Alterna mute de um sink input específico. Thread-safe."""
+        self._worker.toggle_stream_mute(index)
+
+    @Slot()
+    def toggle_mic_mute(self) -> None:
+        """Alterna mute da source padrão (microfone). Thread-safe."""
+        self._worker.toggle_mic_mute()
+
+    @Slot()
+    def cycle_default_sink(self) -> None:
+        """Avança para a próxima saída de áudio e move os streams. Thread-safe."""
+        self._worker.cycle_default_sink()
 
     def stop(self) -> None:
         """Para a thread de áudio graciosamente."""

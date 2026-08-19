@@ -31,11 +31,8 @@ MPRIS_PLAYER_IFACE: str = "org.mpris.MediaPlayer2.Player"
 MPRIS_PATH: str = "/org/mpris/MediaPlayer2"
 DBUS_PROPERTIES_IFACE: str = "org.freedesktop.DBus.Properties"
 
-# Player preferido (tentamos primeiro)
-PREFERRED_PLAYER: str = f"{MPRIS_PREFIX}spotify"
-
-# Fallback: re-descobre player a cada 10s (só quando sem player ativo)
-REDISCOVER_INTERVAL_MS: int = 10_000
+# Timer de fallback e varredura contínua
+REDISCOVER_INTERVAL_MS: int = 2_000
 
 
 class MprisClient(QObject):
@@ -73,6 +70,7 @@ class MprisClient(QObject):
         self._last_art_url: str = ""
         self._last_is_playing: bool = False
         self._last_track_id: str = ""  # ObjectPath MPRIS da faixa atual
+        self._last_player_name: str = ""
 
         # Timer de fallback para redescoberta (não para polling de estado)
         self._rediscover_timer = QTimer(self)
@@ -80,10 +78,6 @@ class MprisClient(QObject):
         self._rediscover_timer.timeout.connect(self._try_rediscover)
         self._rediscover_timer.start()
         
-        self._position_timer = QTimer(self)
-        self._position_timer.setInterval(1000)
-        self._position_timer.timeout.connect(self._poll_position)
-
         # Procura um player logo na inicialização
         self._discover_player()
         if not self._player_service:
@@ -91,12 +85,26 @@ class MprisClient(QObject):
 
     # ── Descoberta de player ─────────────────────────────────────────
 
+    def _read_busctl_property(self, service: str, path: str, iface: str, prop: str) -> str | None:
+        """Helper para ler propriedades via busctl contornando QDBusInterface em Chromium/Electron."""
+        try:
+            res = subprocess.run(
+                ["busctl", "--user", "get-property", service, path, iface, prop],
+                capture_output=True, text=True, timeout=1
+            )
+            if res.returncode == 0:
+                out = res.stdout.strip()
+                if out.startswith('s '):
+                    return out[2:].strip('"')
+        except Exception:
+            pass
+        return None
+
     def _discover_player(self) -> None:
         """Encontra um player MPRIS ativo no D-Bus de sessão.
 
-        Prioriza o Spotify. Se não encontrar, usa o primeiro disponível.
-        Se nenhum for encontrado, limpa o estado e a UI mostrará
-        'Nenhum player detectado'.
+        Seleciona o primeiro player em estado 'Playing'. Se nenhum,
+        pega o primeiro em estado 'Paused'.
         """
         names = self._list_bus_names()
         mpris_names = [n for n in names if n.startswith(MPRIS_PREFIX)]
@@ -105,15 +113,27 @@ class MprisClient(QObject):
             self._clear_player()
             return
 
-        # Prioriza Spotify
-        if PREFERRED_PLAYER in mpris_names:
-            service = PREFERRED_PLAYER
-        else:
-            service = mpris_names[0]
+        best_service = None
+        best_status = ""
 
-        # Só reconecta se o player mudou
-        if service != self._player_service:
-            self._connect_to_player(service)
+        for s in mpris_names:
+            status = self._read_busctl_property(s, MPRIS_PATH, MPRIS_PLAYER_IFACE, "PlaybackStatus")
+            if status == "Playing":
+                best_service = s
+                best_status = status
+                break
+            elif status == "Paused" and best_service is None:
+                best_service = s
+                best_status = status
+
+        if best_service is None:
+            best_service = mpris_names[0]
+
+        if best_service != self._player_service:
+            self._connect_to_player(best_service)
+        elif best_service and best_status == "Playing" and not self._last_is_playing:
+            # Força o refresh para captar mudanças quando um Paused vira Playing silenciosamente
+            self._refresh_state()
 
     def _list_bus_names(self) -> list[str]:
         """Lista todos os nomes registrados no D-Bus de sessão."""
@@ -139,10 +159,6 @@ class MprisClient(QObject):
             MPRIS_PLAYER_IFACE,
             self._bus,
         )
-        
-        # Emite nome do player (ex: spotify)
-        name = service.split(".")[-1] if service else ""
-        self.player_name_changed.emit(name)
 
         self._refresh_state(force_emit=True)
 
@@ -159,21 +175,22 @@ class MprisClient(QObject):
             SLOT("_on_properties_changed()"),
         )
 
-        player_name = service.removeprefix(MPRIS_PREFIX).capitalize()
-        self.player_name_changed.emit(player_name)
+        # Conecta ao signal Seeked nativo do player MPRIS
+        self._bus.connect(
+            service,
+            MPRIS_PATH,
+            MPRIS_PLAYER_IFACE,
+            "Seeked",
+            self,
+            SLOT("_on_seeked(qlonglong)"),
+        )
 
-        signal_status = "signal OK" if self._signal_connected else "sem signal, fallback timer"
-        print(f"[PEEK:MPRIS] Conectado ao player: {player_name} ({signal_status})")
+        signal_status = "signal OK" if self._signal_connected else "sem signal"
+        print(f"[PEEK:MPRIS] Conectado ao player: {service} ({signal_status})")
 
     def force_sync_ui(self) -> None:
         """Força a emissão do estado atual do player, usado logo após a UI conectar os slots."""
-        if self._player_service:
-            name = self._player_service.removeprefix(MPRIS_PREFIX).capitalize()
-            self.player_name_changed.emit(name)
         self._refresh_state(force_emit=True)
-
-        # Para o timer de redescoberta — temos um player ativo
-        self._rediscover_timer.stop()
 
         # Leitura inicial do estado
         self._refresh_state()
@@ -181,14 +198,28 @@ class MprisClient(QObject):
     def _disconnect_properties_signal(self) -> None:
         """Desconecta o signal PropertiesChanged do player anterior."""
         if self._signal_connected and self._player_service:
-            self._bus.disconnect(
-                self._player_service,
-                MPRIS_PATH,
-                DBUS_PROPERTIES_IFACE,
-                "PropertiesChanged",
-                self._on_properties_changed,
-            )
-            self._signal_connected = False
+            try:
+                self._bus.disconnect(
+                    self._player_service,
+                    MPRIS_PATH,
+                    DBUS_PROPERTIES_IFACE,
+                    "PropertiesChanged",
+                    self,
+                    SLOT("_on_properties_changed()"),
+                )
+                self._bus.disconnect(
+                    self._player_service,
+                    MPRIS_PATH,
+                    MPRIS_PLAYER_IFACE,
+                    "Seeked",
+                    self,
+                    SLOT("_on_seeked(qlonglong)"),
+                )
+            except Exception as e:
+                import logging
+                logging.warning(f"[PEEK:MPRIS] Falha silenciosa ao desconectar signal do player antigo: {e}")
+            finally:
+                self._signal_connected = False
 
     def _clear_player(self) -> None:
         """Limpa referências ao player (desconectou ou não existe)."""
@@ -225,6 +256,11 @@ class MprisClient(QObject):
 
     # ── Atualização de estado (event-driven) ─────────────────────────
 
+    @Slot("qlonglong")
+    def _on_seeked(self, position_us: int) -> None:
+        """Callback do signal Seeked do MPRIS (enviado em microsegundos)."""
+        self.position_changed.emit(position_us)
+
     @Slot()
     def _on_properties_changed(self) -> None:
         """Callback do signal PropertiesChanged do D-Bus.
@@ -242,25 +278,35 @@ class MprisClient(QObject):
             self._clear_player()
             return
 
-        # ── PlaybackStatus (via QDBusInterface.property) ─────────────
-        try:
-            status = self._player_iface.property("PlaybackStatus")
-            if status is None:
-                self._clear_player()
-                return
+        # ── Identity ─────────────────────────────────────────────────
+        identity = self._read_busctl_property(self._player_service, MPRIS_PATH, "org.mpris.MediaPlayer2", "Identity")
+        if not identity:
+            identity = self._player_service.removeprefix(MPRIS_PREFIX).capitalize()
+        
+        if force_emit or identity != self._last_player_name:
+            self._last_player_name = identity
+            self.player_name_changed.emit(identity)
 
-            is_playing = str(status) == "Playing"
-            if force_emit or is_playing != self._last_is_playing:
-                self._last_is_playing = is_playing
-                self.playback_state_changed.emit(is_playing)
-                
-                if is_playing:
-                    self._position_timer.start()
-                    self._poll_position()  # Atualiza logo no start
-                else:
-                    self._position_timer.stop()
-        except Exception as e:
-            print(f"[PEEK:MPRIS] Erro ao ler PlaybackStatus: {e}")
+        # ── PlaybackStatus ───────────────────────────────────────────
+        status = self._read_busctl_property(self._player_service, MPRIS_PATH, MPRIS_PLAYER_IFACE, "PlaybackStatus")
+        if status is None:
+            # Fallback para QDBusInterface caso busctl falhe bizarramente
+            try:
+                status = self._player_iface.property("PlaybackStatus")
+            except Exception:
+                status = None
+
+        if status is None:
+            self._clear_player()
+            return
+
+        is_playing = str(status) == "Playing"
+        if force_emit or is_playing != self._last_is_playing:
+            self._last_is_playing = is_playing
+            self.playback_state_changed.emit(is_playing)
+            
+            # Quando dá Play/Pause, força sync de position para a UI não extrapolar errado
+            self._poll_position()
 
         # ── Metadata (via busctl --json) ─────────────────────────────
         try:
@@ -281,6 +327,9 @@ class MprisClient(QObject):
                 self._last_title = title
                 self._last_artist = artist
                 self.track_changed.emit(title, artist)
+                
+                # Quando a música muda, força sync de position
+                self._poll_position()
 
             # ── Art URL (mpris:artUrl) ───────────────────────────────
             art_url = str(metadata.get("mpris:artUrl", "") or "")
@@ -301,16 +350,29 @@ class MprisClient(QObject):
             
     @Slot()
     def _poll_position(self) -> None:
-        """Lê a propriedade Position (microssegundos) do MPRIS a cada segundo."""
-        if not self._player_iface or not self._player_iface.isValid():
-            self._position_timer.stop()
+        """Lê a propriedade Position (microssegundos) do MPRIS via busctl."""
+        if not self._player_iface or not self._player_iface.isValid() or not self._player_service:
             return
             
         try:
-            pos = self._player_iface.property("Position")
-            if pos is not None:
-                self.position_changed.emit(int(pos))
-        except Exception as e:
+            # PySide6 falha ao ler Int64 ('x') via property(), retorna None. Usamos busctl.
+            result = subprocess.run(
+                [
+                    "busctl", "--user", "get-property",
+                    self._player_service,
+                    MPRIS_PATH,
+                    MPRIS_PLAYER_IFACE,
+                    "Position",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
+            if result.returncode == 0:
+                parts = result.stdout.strip().split()
+                if len(parts) >= 2 and parts[0] == "x":
+                    self.position_changed.emit(int(parts[1]))
+        except Exception:
             pass # Pode dar erro se o player estiver fechando
 
     def _read_metadata_busctl(self) -> dict[str, object] | None:

@@ -29,10 +29,11 @@ from PySide6.QtCore import (
     Signal,
     Slot
 )
-from PySide6.QtGui import QEnterEvent, QGuiApplication
-from PySide6.QtWidgets import QHBoxLayout, QLayout, QVBoxLayout, QWidget, QFrame
+from PySide6.QtGui import QEnterEvent, QGuiApplication, QIcon
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLayout, QVBoxLayout, QWidget, QFrame
 from typing import Any
 
+from ui.components.clickable_icon import ClickableIcon
 from ui.components.media_player import MediaPlayerWidget
 from ui.components.volume_slider import VolumeSlider
 
@@ -40,10 +41,13 @@ from ui.components.volume_slider import VolumeSlider
 class SidebarWindow(QWidget):
     """Painel que desliza da borda direita da tela."""
 
-    mouse_entered = Signal()
-    mouse_left = Signal()
-    hidden_fully = Signal()
+    mouse_entered      = Signal()
+    mouse_left         = Signal()
+    hidden_fully       = Signal()
     app_volume_changed = Signal(int, int)
+    app_mute_toggled   = Signal(int)  # index do stream PulseAudio
+    mic_mute_requested = Signal()     # toggle do microfone global
+    output_cycle_requested = Signal() # toggle de saída de áudio
 
     WIDTH: int = 360
     ANIMATION_DURATION_MS: int = 250
@@ -127,7 +131,12 @@ class SidebarWindow(QWidget):
         card_layout.setContentsMargins(10, 16, 10, 16)  # L/R reduzido de 16→10 (+12px úteis)
         card_layout.setSpacing(12)
 
-        # ── Área do Mixer (Esquerda) ──
+        # ── Área do Mixer (Esquerda): sliders + controles globais ──
+        mixer_col = QVBoxLayout()
+        mixer_col.setContentsMargins(0, 0, 0, 0)
+        mixer_col.setSpacing(8)
+
+        # Sliders de app (row horizontal)
         self._mixer_layout = QHBoxLayout()
         self._mixer_layout.setContentsMargins(0, 0, 0, 0)
         self._mixer_layout.setSpacing(8)
@@ -141,12 +150,16 @@ class SidebarWindow(QWidget):
             Qt.AlignmentFlag.AlignVCenter,
         )
 
-        card_layout.addLayout(self._mixer_layout, 0)
+        mixer_col.addLayout(self._mixer_layout)
+        mixer_col.addStretch()
+        mixer_col.addLayout(self._build_global_controls())
+
+        card_layout.addLayout(mixer_col, 0)
 
         # ── Card de controle de mídia (Direita) ──
         self.media_player = MediaPlayerWidget()
         self.media_player.setMouseTracking(True)
-        card_layout.addWidget(self.media_player, 1)
+        card_layout.addWidget(self.media_player, 1, Qt.AlignmentFlag.AlignTop)
 
         # Adiciona o card principal na janela
         main_layout.addWidget(self.main_card)
@@ -158,6 +171,60 @@ class SidebarWindow(QWidget):
         self._animation.finished.connect(self._on_animation_finished)
 
     # ── Helpers ──────────────────────────────────────────────────────
+
+    def _build_global_controls(self) -> QHBoxLayout:
+        """Linha de controles globais (Mic + Speaker) ancorada ao fundo esquerdo."""
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        # ── Microfone ──
+        self._mic_icon = ClickableIcon()
+        self._mic_icon.setFixedSize(18, 18)
+        mic_px = QIcon.fromTheme("microphone-sensitivity-high").pixmap(18, 18)
+        if mic_px.isNull():
+            mic_px = QIcon.fromTheme("audio-input-microphone").pixmap(18, 18)
+        self._mic_icon.setPixmap(mic_px)
+        self._mic_icon.setToolTip("")  # O KDE as vezes injeta o nome do ícone, forçamos vazio
+        self._mic_icon.leftClicked.connect(self._on_mic_left_click)
+        self._mic_icon.rightClicked.connect(
+            lambda: print("Global: Abrir Menu do Mic")
+        )
+
+        # ── Saída de Áudio (Speaker) ──
+        self._speaker_icon = ClickableIcon()
+        self._speaker_icon.setFixedSize(18, 18)
+        # Usa Mode.Normal + State.On para garantir a cor ativa (branca),
+        # evitando a renderização cinza do modo Disabled/Off em alguns temas.
+        spk_icon = QIcon.fromTheme("audio-volume-high")
+        if spk_icon.isNull():
+            spk_icon = QIcon.fromTheme("audio-card")
+        spk_px = spk_icon.pixmap(18, 18, QIcon.Mode.Normal, QIcon.State.On)
+        self._speaker_icon.setPixmap(spk_px)
+        self._speaker_icon.setToolTip("")  # Extermínio de tooltip
+        self._speaker_icon.leftClicked.connect(self.output_cycle_requested.emit)
+        self._speaker_icon.rightClicked.connect(
+            lambda: print("Global: Abrir Menu de Saída")
+        )
+
+        row.addWidget(self._mic_icon,     0, Qt.AlignmentFlag.AlignBottom)
+        row.addWidget(self._speaker_icon, 0, Qt.AlignmentFlag.AlignBottom)
+        row.addStretch()
+        return row
+
+    def _on_mic_left_click(self) -> None:
+        """Otimismo visual para o microfone global e emissão do sinal real."""
+        effect = self._mic_icon.graphicsEffect()
+        from PySide6.QtWidgets import QGraphicsOpacityEffect
+        current_opacity = effect.opacity() if isinstance(effect, QGraphicsOpacityEffect) else 1.0
+        
+        # Otimismo: Se opacidade atual é >= 0.5 (ativo), finge que mutou (passa True), senão False.
+        self.on_mic_mute_changed(current_opacity > 0.5)
+        self._mic_icon.update()
+        self._mic_icon.repaint()
+        
+        self.mic_mute_requested.emit()
+
 
     def _screen_geometry(self) -> QRect:
         """Retorna a geometria disponível do monitor principal.
@@ -261,13 +328,15 @@ class SidebarWindow(QWidget):
                 
         # Atualiza ou instancia novos sliders
         for app in apps:
-            idx = app["index"]
+            idx  = app["index"]
             name = app["name"]
-            vol = app["volume"]
+            vol  = app["volume"]
+            mute = app["mute"]
             
             if idx in self._app_sliders:
                 slider = self._app_sliders[idx]
                 slider.set_icon(name)
+                slider.set_muted(mute)
                 # Só atualiza o volume visual se o usuário NÃO estiver segurando o slider
                 if not slider.is_dragging():
                     slider.set_volume(vol)
@@ -275,10 +344,13 @@ class SidebarWindow(QWidget):
                 slider = VolumeSlider()
                 slider.set_icon(name)
                 slider.set_volume(vol)
+                slider.set_muted(mute)
                 slider.setMouseTracking(True)
+                slider.set_stream_index(idx)
                 
                 # Usando default argument (idx=idx) para capturar o valor no loop
                 slider.volume_changed.connect(lambda v, idx=idx: self.app_volume_changed.emit(idx, v))
+                slider.mute_toggled.connect(self.app_mute_toggled)
                 
                 self._app_sliders[idx] = slider
                 self._mixer_layout.addWidget(slider, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -288,6 +360,38 @@ class SidebarWindow(QWidget):
         if not self._is_visible:
             self.hide()
             self.hidden_fully.emit()
+
+    @Slot(bool)
+    def on_mic_mute_changed(self, muted: bool) -> None:
+        """Atualiza o visual do botão do Mic quando o estado de mute mudar.
+
+        Mutado  → ativo com ícone muted + opacidade 0.4
+        Ativo   → ícone normal + opacidade 1.0
+        """
+        if muted:
+            icon_name = "microphone-sensitivity-muted"
+            fallback  = "audio-input-microphone-muted"
+            opacity   = 0.4
+        else:
+            icon_name = "microphone-sensitivity-high"
+            fallback  = "audio-input-microphone"
+            opacity   = 1.0
+
+        from PySide6.QtGui import QIcon
+        px = QIcon.fromTheme(icon_name).pixmap(18, 18, QIcon.Mode.Normal, QIcon.State.On)
+        if px.isNull():
+            px = QIcon.fromTheme(fallback).pixmap(18, 18, QIcon.Mode.Normal, QIcon.State.On)
+        if not px.isNull():
+            self._mic_icon.setPixmap(px)
+
+        from PySide6.QtWidgets import QGraphicsOpacityEffect
+        effect = self._mic_icon.graphicsEffect()
+        if not isinstance(effect, QGraphicsOpacityEffect):
+            effect = QGraphicsOpacityEffect(self._mic_icon)
+            self._mic_icon.setGraphicsEffect(effect)
+        effect.setOpacity(opacity)
+        self._mic_icon.update()
+        self._mic_icon.repaint()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         """Reancora a borda direita quando o layout expande dinamicamente.

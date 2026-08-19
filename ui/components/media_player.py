@@ -17,6 +17,7 @@ a lógica de backend fica no Controller.
 """
 
 from __future__ import annotations
+from ui.components.clickable_icon import ClickableLabel
 import time
 
 from PySide6.QtCore import Qt, Signal, Slot
@@ -92,6 +93,11 @@ class MediaPlayerWidget(QFrame):
         self._current_pos_s: int = 0
         self._duration_s: int = 0
         self._last_seek_time: float = 0.0  # Marcação temporal do último seek do usuário
+        
+        self._local_pos_timer = QTimer(self)
+        self._local_pos_timer.setInterval(1000)
+        self._local_pos_timer.timeout.connect(self._on_local_tick)
+        
         self._setup_ui()
         self._connect_buttons()
 
@@ -107,15 +113,28 @@ class MediaPlayerWidget(QFrame):
         )
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 12, 10, 12)  # L/R reduzido de 16→10 para ganhar 12px
+        main_layout.setContentsMargins(10, 0, 10, 12)  # Top=0 para alinhar com os sliders de volume
         main_layout.setSpacing(10)
 
-        # ── Label de seção ───────────────────────────────────────────
-        self._section_label = QLabel("REPRODUZINDO")
-        self._section_label.setObjectName("sectionLabel")
-        self._section_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self._section_label.setContentsMargins(0, 0, 0, 0)
-        main_layout.addWidget(self._section_label)
+        # ── Header de Seção ──────────────────────────────────────────
+        header_row = QHBoxLayout()
+        header_row.setSpacing(0)
+        
+        self._section_prefix = QLabel("REPRODUZINDO NO ")
+        self._section_prefix.setObjectName("sectionPrefixLabel")
+        self._section_prefix.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        
+        # O ClickableLabel aceita formatação rich text
+        self._section_player = ClickableLabel("MÍDIA")
+        self._section_player.setObjectName("sectionPlayerLabel")
+        self._section_player.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self._section_player.leftClicked.connect(lambda: print("UI: Abrir seletor de players"))
+        
+        header_row.addWidget(self._section_prefix)
+        header_row.addWidget(self._section_player)
+        header_row.addStretch(1)
+        
+        main_layout.addLayout(header_row)
 
         # ── HBox de conteúdo: capa + detalhes ────────────────────────
         content_row = QHBoxLayout()
@@ -246,15 +265,20 @@ class MediaPlayerWidget(QFrame):
     def update_player_name(self, name: str) -> None:
         """Atualiza o nome do player exibido na seção superior."""
         if not name:
-            self._section_label.setText("MÍDIA")
+            self._section_player.setText("MÍDIA ›")
         else:
-            self._section_label.setText(f"REPRODUZINDO NO {name.upper()}")
+            self._section_player.setText(f"{name.upper()} ›")
 
     @Slot(bool)
     def update_playback_state(self, is_playing: bool) -> None:
-        """Atualiza ícone do botão play/pause."""
+        """Atualiza ícone do botão play/pause e gerencia timer de extrapolação."""
         self._is_playing = is_playing
         self._btn_play.setText("⏸" if is_playing else "▶")
+        
+        if is_playing:
+            self._local_pos_timer.start()
+        else:
+            self._local_pos_timer.stop()
 
     @Slot(QPixmap)
     def update_art(self, pixmap: QPixmap) -> None:
@@ -310,19 +334,33 @@ class MediaPlayerWidget(QFrame):
 
     @Slot(int)
     def update_position(self, pos_us: int) -> None:
-        """Atualiza a posição da seek bar (pos_us vem em microsegundos do MPRIS).
+        """Sincroniza a posição (vindo do backend MPRIS).
         
-        A trava anti-snapback ignora o polling por 1.5s após o usuário soltar a barra,
-        dando tempo ao Spotify de aplicar o seek sem que o timer sobrescreva a UI.
+        A trava anti-snapback ignora o polling/sync por 1.5s após o usuário soltar a barra,
+        dando tempo ao player de aplicar o seek sem que o sync sobrescreva a UI retroativamente.
         """
         if time.time() - self._last_seek_time < 1.5:
             return
+            
         sec = pos_us // 1_000_000
+        self._set_current_pos_internal(sec)
+
+    def _on_local_tick(self) -> None:
+        """Extrapolação local de tempo sem onerar o D-Bus."""
+        if time.time() - self._last_seek_time < 1.5:
+            return
+            
+        self._set_current_pos_internal(self._current_pos_s + 1)
+
+    def _set_current_pos_internal(self, sec: int) -> None:
+        """Centraliza a atualização visual da barra (usada no sync e no tick local)."""
+        if sec > self._duration_s and self._duration_s > 0:
+            sec = self._duration_s
+            
         self._current_pos_s = sec
         self._seek_slider.set_time_current(self._format_time(sec))
         
         if not self._seek_slider.isSliderDown():
-            # Converte microsegundos para segundos para evitar overflow de 32-bit int no QSlider
             self._seek_slider.blockSignals(True)
             self._seek_slider.setValue(sec)
             self._seek_slider.blockSignals(False)
@@ -344,7 +382,7 @@ class MediaPlayerWidget(QFrame):
                 background: transparent;
             }
 
-            #sectionLabel {
+            #sectionPrefixLabel, #sectionPlayerLabel {
                 color: #a6adc8;
                 font-size: 11px;
                 font-weight: bold;

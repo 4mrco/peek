@@ -18,7 +18,17 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import QEnterEvent, QPaintEvent, QPainter, QColor, QFont, QIcon, QMouseEvent
-from PySide6.QtWidgets import QSlider, QSizePolicy, QStyle, QStyleOptionSlider, QWidget, QVBoxLayout, QLabel
+from PySide6.QtWidgets import (
+    QGraphicsOpacityEffect,
+    QLabel,
+    QSlider,
+    QSizePolicy,
+    QStyle,
+    QStyleOptionSlider,
+    QVBoxLayout,
+    QWidget,
+)
+from ui.components.clickable_icon import ClickableIcon
 
 
 # ── Constantes de design ─────────────────────────────────────────────
@@ -179,19 +189,23 @@ class VolumeSlider(QWidget):
     """
     
     volume_changed = Signal(int)
+    mute_toggled   = Signal(int)  # Emite o index do stream PulseAudio
     
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        
+        self._stream_index: int = -1  # -1 = master, outro = sink input index
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         
-        # Ícone
-        self._icon_label = QLabel()
-        self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Ícone clicável do app (ClickableIcon: leftClicked = toggle mute)
+        self._icon_label = ClickableIcon()
         self._icon_label.setFixedSize(16, 16)
+        self._app_name: str = ""
+        self._icon_label.leftClicked.connect(self._on_icon_left_click)
         
         # Slider
         self._slider = _ThinSlider()
@@ -214,9 +228,39 @@ class VolumeSlider(QWidget):
 
     def set_icon(self, app_name: str) -> None:
         """Tenta buscar um ícone de tema pelo nome do app. Falha segura para volume padrão."""
+        self._app_name = app_name
         icon = QIcon.fromTheme(app_name.lower())
         if icon.isNull():
             icon = QIcon.fromTheme("audio-volume-high")
-        
         pixmap = icon.pixmap(16, 16)
         self._icon_label.setPixmap(pixmap)
+
+    def set_stream_index(self, index: int) -> None:
+        """Registra o index do sink input PulseAudio para mute toggle."""
+        self._stream_index = index
+
+    def set_muted(self, muted: bool) -> None:
+        """Atualiza o feedback visual de mute via opacidade.
+
+        Mutado  → 40% de opacidade (palído, claramente silenciado).
+        Ativo   → 100% de opacidade.
+        """
+        effect = self.graphicsEffect()
+        if not isinstance(effect, QGraphicsOpacityEffect):
+            effect = QGraphicsOpacityEffect(self)
+            self.setGraphicsEffect(effect)
+        effect.setOpacity(0.4 if muted else 1.0)
+        self.update()
+        self.repaint()
+
+    def _on_icon_left_click(self) -> None:
+        """Emite mute_toggled com o index do stream (substitui print placeholder)."""
+        if self._stream_index >= 0:
+            # Otimismo visual imediato (sem delay do polling do PulseAudio)
+            effect = self.graphicsEffect()
+            if isinstance(effect, QGraphicsOpacityEffect):
+                # Se está 1.0 (não mutado), fingimos que mutou. Se está 0.4, fingimos que desmutou.
+                current_is_muted = effect.opacity() < 0.5
+                self.set_muted(not current_is_muted)
+                
+            self.mute_toggled.emit(self._stream_index)
