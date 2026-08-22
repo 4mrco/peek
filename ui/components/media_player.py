@@ -329,6 +329,7 @@ class MediaPlayerWidget(QFrame):
     def _on_slider_released(self) -> None:
         """Ao soltar: dispara o seek real e arma a trava anti-snapback."""
         val = self._seek_slider.value()
+        self._current_pos_s = val           # Atualiza o estado interno p/ o timer local não fazer snapback
         self._last_seek_time = time.time()  # Arma a trava
         self.seek_requested.emit(val)
 
@@ -494,16 +495,30 @@ class _SeekSlider(QSlider):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        """Pula o valor do slider exatamente para onde o mouse clicou."""
         if event.button() == Qt.MouseButton.LeftButton:
-            # O X=0 é a base (valor mínimo) e width() é o máximo
-            val = self.minimum() + ((self.maximum() - self.minimum()) * event.pos().x()) / self.width()
-            self.setValue(int(val))
-            # Dispara sliderReleased para acionar o seek e a trava anti-snapback,
-            # sem precisar arrastar (clique direto na barra)
-            self.sliderReleased.emit()
-            event.accept()
-        super().mousePressEvent(event)
+            opt = QStyleOptionSlider()
+            self.initStyleOption(opt)
+            val = self.style().sliderValueFromPosition(opt.minimum, opt.maximum, event.pos().x(), opt.rect.width())
+            self.setValue(val)
+            self.setSliderDown(True)  # Manually force the tracking state (bypasses native hit-test)
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self.isSliderDown():
+            opt = QStyleOptionSlider()
+            self.initStyleOption(opt)
+            val = self.style().sliderValueFromPosition(opt.minimum, opt.maximum, event.pos().x(), opt.rect.width())
+            self.setValue(val)
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self.isSliderDown():
+            self.setSliderDown(False)
+            self.sliderReleased.emit()  # Manually emit the signal for our controller
+        else:
+            super().mouseReleaseEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
         super().paintEvent(event)
@@ -521,16 +536,35 @@ class _SeekSlider(QSlider):
         font.setBold(True)
         painter.setFont(font)
         
+        fm = painter.fontMetrics()
+        current_w = fm.horizontalAdvance(self._time_current_str)
+        
         rect = self.rect()
         rect.adjust(8, 0, -8, 0)
         
-        # Desenha Tempo Atual à Esquerda (cor escura)
-        painter.setPen(QColor("#11111b"))
-        painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._time_current_str)
+        # Posição X móvel do tempo atual (acompanha o polegar/handle)
+        progress = 0.0
+        if self.maximum() > 0:
+            progress = self.value() / self.maximum()
+            
+        # Mapeia o progresso para a largura útil do rect
+        x_pos = rect.left() + (rect.width() - current_w) * progress
         
-        # Desenha Tempo Total à Direita (cor clara)
-        painter.setPen(QColor("#a6adc8"))
-        painter.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._time_total_str)
+        # Desenha Tempo Atual (Móvel)
+        painter.setPen(QColor("#11111b"))
+        painter.drawText(
+            int(x_pos), 
+            rect.top(), 
+            current_w, 
+            rect.height(), 
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, 
+            self._time_current_str
+        )
+        
+        # Desenha Tempo Total à Direita (apenas se o progresso for < 90% para evitar colisão)
+        if progress < 0.90:
+            painter.setPen(QColor("#a6adc8"))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._time_total_str)
 
     def _apply_style(self) -> None:
         h = self._groove_height

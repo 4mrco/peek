@@ -221,6 +221,13 @@ class _AudioWorker(QObject):
         except Exception as e:
             print(f"[PEEK:Audio] Erro ao definir volume do app {index}: {e}")
 
+    def get_stream_name(self, index: int) -> str | None:
+        """Recupera o nome do app a partir do seu index no PulseAudio."""
+        for stream in self._last_apps:
+            if stream.get("index") == index:
+                return stream.get("name")
+        return None
+
     @Slot(int)
     def toggle_stream_mute(self, index: int) -> None:
         """Alterna o mute de um sink input específico pelo index."""
@@ -360,3 +367,7 @@ class AudioClient(QObject):
         """Para a thread de áudio graciosamente."""
         self._thread.quit()
         self._thread.wait(2000)
+
+    def get_stream_name(self, index: int) -> str | None:
+        """Expõe a busca do nome do stream a partir do worker."""
+        return self._worker.get_stream_name(index)

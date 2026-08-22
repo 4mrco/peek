@@ -12,12 +12,18 @@ Design: Catppuccin Mocha — consistente com a sidebar.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, Qt, Signal, Slot
+from ui.components.clickable_icon import ClickableLabel
+from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, Qt, Signal, Slot, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QGridLayout,
+    QLineEdit,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -25,6 +31,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QScrollArea,
 )
 
 from core.logger import LOG_PATH
@@ -43,6 +50,167 @@ _ACCENT_GREEN = "#a6e3a1"
 _ACCENT_RED   = "#f38ba8"
 _RADIUS       = "12px"
 _RADIUS_SM    = "8px"
+
+# ── Catppuccin Mocha Palette Reference ──
+PREDEFINED_COLORS = [
+    "#f38ba8", "#fab387", "#f9e2af", "#a6e3a1",
+    "#89dceb", "#74c7ec", "#89b4fa", "#b4befe",
+    "#cba6f7", "#f5c2e7", "#cdd6f4", "#a6adc8",
+    "#1e1e2e", "#181825", "#11111b", "#313244",
+]
+
+class ColorPickerDialog(QDialog):
+    """Modal dialog for picking a hex color."""
+    
+    color_previewed = Signal(str)
+    color_applied = Signal(str)
+    preview_canceled = Signal()
+
+    def __init__(self, current_hex: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Color Picker")
+        self.setFixedSize(280, 300)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+
+        self._selected_color = current_hex
+        self._setup_ui()
+        
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #1e1e2e;
+                color: #cdd6f4;
+            }
+            QLabel {
+                color: #cdd6f4;
+                font-size: 12px;
+            }
+            QCheckBox {
+                color: #cdd6f4;
+                font-size: 11px;
+            }
+            QLineEdit {
+                background-color: #11111b;
+                color: #cdd6f4;
+                border: 1px solid #313244;
+                border-radius: 6px;
+                padding: 4px;
+                font-family: monospace;
+            }
+            QPushButton {
+                background-color: #313244;
+                color: #cdd6f4;
+                border: none;
+                border-radius: 6px;
+                padding: 6px 12px;
+            }
+            QPushButton:hover {
+                background-color: #45475a;
+            }
+            QPushButton:pressed {
+                background-color: #2a2a3c;
+            }
+            QPushButton#btnApply {
+                background-color: #cba6f7;
+                color: #11111b;
+                font-weight: bold;
+            }
+            QPushButton#btnApply:hover {
+                background-color: #b4befe;
+            }
+        """)
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        
+        # ── Color Grid ──
+        grid_layout = QGridLayout()
+        grid_layout.setSpacing(8)
+        row, col = 0, 0
+        for hex_code in PREDEFINED_COLORS:
+            btn = QPushButton()
+            btn.setFixedSize(24, 24)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(f"background-color: {hex_code}; border-radius: 12px;")
+            btn.clicked.connect(lambda _, h=hex_code: self._set_hex_text(h))
+            grid_layout.addWidget(btn, row, col)
+            col += 1
+            if col > 7:
+                col = 0
+                row += 1
+                
+        layout.addLayout(grid_layout)
+        
+        # ── Hex Editor and Preview ──
+        hex_layout = QHBoxLayout()
+        
+        self._preview_frame = QFrame()
+        self._preview_frame.setFixedSize(24, 24)
+        self._preview_frame.setStyleSheet(f"background-color: {self._selected_color}; border-radius: 6px; border: 1px solid #313244;")
+        hex_layout.addWidget(self._preview_frame)
+        
+        lbl_hash = QLabel("#")
+        lbl_hash.setFont(QFont("monospace", 12))
+        hex_layout.addWidget(lbl_hash)
+        
+        self._hex_input = QLineEdit()
+        self._hex_input.setText(self._selected_color.lstrip("#"))
+        self._hex_input.setMaxLength(6)
+        self._hex_input.textChanged.connect(self._on_hex_changed)
+        hex_layout.addWidget(self._hex_input)
+        
+        layout.addLayout(hex_layout)
+        
+        layout.addStretch()
+        
+        self.live_preview_cb = QCheckBox("Manter painel PEEK visível para teste")
+        self.live_preview_cb.setChecked(True)
+        layout.addWidget(self.live_preview_cb)
+        
+        # ── Buttons ──
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_cancel.clicked.connect(self.reject)
+        btn_layout.addWidget(btn_cancel)
+        
+        btn_apply = QPushButton("Aplicar")
+        btn_apply.setObjectName("btnApply")
+        btn_apply.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_apply.clicked.connect(self._on_apply)
+        btn_layout.addWidget(btn_apply)
+        
+        layout.addLayout(btn_layout)
+
+    @Slot(str)
+    def _set_hex_text(self, hex_code: str) -> None:
+        self._hex_input.setText(hex_code.lstrip("#"))
+
+    @Slot(str)
+    def _on_hex_changed(self, text: str) -> None:
+        if re.match(r"^[0-9a-fA-F]{6}$", text) or re.match(r"^[0-9a-fA-F]{3}$", text):
+            self._selected_color = f"#{text.lower()}"
+            self._preview_frame.setStyleSheet(f"background-color: {self._selected_color}; border-radius: 6px; border: 1px solid #313244;")
+            self.color_previewed.emit(self._selected_color)
+
+    def reject(self) -> None:
+        self.preview_canceled.emit()
+        super().reject()
+
+    @Slot()
+    def _on_apply(self) -> None:
+        text = self._hex_input.text()
+        if re.match(r"^[0-9a-fA-F]{6}$", text) or re.match(r"^[0-9a-fA-F]{3}$", text):
+            self._selected_color = f"#{text.lower()}"
+            self.color_applied.emit(self._selected_color)
+            self.accept()
+        else:
+            self._hex_input.setText(self._selected_color.lstrip("#"))
+
+    def get_color(self) -> str:
+        return self._selected_color
 
 # ── Custom Slide Switch ───────────────────────────────────────────────────
 
@@ -135,11 +303,13 @@ class ControlCenter(QWidget):
 
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        # parent=None é crítico: impede que o Wayland herde geometria de
-        # qualquer janela ativa (ex: a sidebar) como origin para esta janela.
         super().__init__(None)
         self._service_active: bool = True
-        self._centered: bool = False  # Centraliza apenas na primeira exibição
+        self._centered: bool = False  
+        
+        self._current_primary = _ACCENT_MAUVE
+        self._current_bg = _BG_BASE
+        
         self._setup_window()
 
         # ── Early Severing (Wayland) ──────────────────────────────────────────
@@ -151,6 +321,10 @@ class ControlCenter(QWidget):
         if handle is not None:
             handle.setTransientParent(None)
 
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.setInterval(5000)
+        self._auto_refresh_timer.timeout.connect(self._load_logs)
+
         self._setup_ui()
 
     # ── Setup ─────────────────────────────────────────────────────────────
@@ -159,12 +333,11 @@ class ControlCenter(QWidget):
         self.setWindowTitle("PEEK — Control Center")
         self.setMinimumWidth(460)
         self.setMaximumWidth(560)
+        self.setFixedHeight(650)
         self.setStyleSheet(self._global_stylesheet())
         # Qt.Window garante janela de topo raiz independente no Wayland.
         # WindowCloseButtonHint mantém o botão ✕ nativo.
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint)
-        # ShrinkToFit: deixa o layout controlar o tamanho da janela completamente.
-        self.layout().setSizeConstraint(self.layout().SizeConstraint.SetFixedSize) if self.layout() else None
 
     def showEvent(self, event) -> None:  # noqa: N802
         """Centraliza na tela e corta o parentesco transiente nativo.
@@ -175,6 +348,7 @@ class ControlCenter(QWidget):
         a qualquer outra (ex: a sidebar) no protocolo Wayland.
         """
         super().showEvent(event)
+        self._auto_refresh_timer.start()
 
         # ── Corte do parentesco transiente nativo ───────────────────────
         handle = self.windowHandle()
@@ -192,19 +366,35 @@ class ControlCenter(QWidget):
                     rect.center().y() - self.height() // 2,
                 )
 
+    def hideEvent(self, event) -> None:  # noqa: N802
+        super().hideEvent(event)
+        self._auto_refresh_timer.stop()
+
     def _setup_ui(self) -> None:
-        root = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        scroll_area = QScrollArea(self)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setObjectName("mainScroll")
+        main_layout.addWidget(scroll_area)
+        
+        content_widget = QWidget()
+        scroll_area.setWidget(content_widget)
+
+        root = QVBoxLayout(content_widget)
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(20)
-        # SetFixedSize: proíbe espaço vazio — janela esmaga/expande automaticamente
-        # no frame exato em que um widget filho recebe .hide() ou .show().
-        root.setSizeConstraint(root.SizeConstraint.SetFixedSize)
 
         # ── Header ──────────────────────────────────────────────────────
         root.addLayout(self._build_header())
 
         # ── Card: Serviço ─────────────────────────────────────────────────────
         root.addWidget(self._build_service_card())
+
+        # ── Card: Aparência ──────────────────────────────────────────────────
+        root.addWidget(self._build_appearance_card())
 
         # ── Card: Autostart ────────────────────────────────────────────────
         root.addWidget(self._build_autostart_card())
@@ -242,11 +432,10 @@ class ControlCenter(QWidget):
         layout.addLayout(title_col)
         layout.addStretch()
 
-        self._status_badge = QLabel("●")
+        self._status_badge = QLabel("")
         self._status_badge.setObjectName("ledStatusActive")
         self._status_badge.setFixedSize(16, 16)
-        self._status_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._status_badge)
+        layout.addWidget(self._status_badge, 0, Qt.AlignmentFlag.AlignVCenter)
 
         return layout
 
@@ -368,9 +557,11 @@ class ControlCenter(QWidget):
         header_row.addWidget(lbl)
 
         # LED de saúde — colorido via CSS / objectName dinâmico
-        self._health_led = QLabel("●")
+        self._health_led = QLabel("")
         self._health_led.setObjectName("ledOk")
-        header_row.addWidget(self._health_led)
+        self._health_led.setFixedSize(12, 12)
+        header_row.addSpacing(6)
+        header_row.addWidget(self._health_led, 0, Qt.AlignmentFlag.AlignVCenter)
 
         header_row.addStretch()
 
@@ -381,8 +572,9 @@ class ControlCenter(QWidget):
         self._toggle_log_btn.clicked.connect(self._toggle_log_view)
         header_row.addWidget(self._toggle_log_btn)
 
-        self._refresh_btn = QPushButton("↻ Atualizar")
-        self._refresh_btn.setObjectName("btnRefresh")
+        self._refresh_btn = QPushButton("↻")
+        self._refresh_btn.setObjectName("btnRefreshIcon")
+        self._refresh_btn.setFixedSize(28, 28)
         self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._refresh_btn.clicked.connect(self._load_logs)
         header_row.addWidget(self._refresh_btn)
@@ -393,8 +585,9 @@ class ControlCenter(QWidget):
         self._log_view = QTextEdit()
         self._log_view.setObjectName("logView")
         self._log_view.setReadOnly(True)
-        self._log_view.setFont(QFont("JetBrains Mono, Monospace", 9))
-        self._log_view.setFixedHeight(160)
+        self._log_view.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._log_view.setFont(QFont("JetBrains Mono, Monospace", 13))
+        self._log_view.setFixedHeight(240)
         self._log_view.hide()  # Começa recolhido
         layout.addWidget(self._log_view)
 
@@ -403,11 +596,129 @@ class ControlCenter(QWidget):
 
         return card
 
+    def _build_appearance_card(self) -> QFrame:
+        card = self._make_card()
+        layout = QVBoxLayout(card)
+        layout.setSpacing(16)
+
+        lbl = QLabel("APARÊNCIA")
+        lbl.setObjectName("sectionLabel")
+        layout.addWidget(lbl)
+
+        # ── Seção: Cor Principal ──
+        primary_row = QHBoxLayout()
+        
+        primary_name = QLabel("Cor Principal")
+        primary_name.setObjectName("settingName")
+        primary_row.addWidget(primary_name)
+        
+        primary_row.addStretch()
+        
+        # Botão Editar (indicador visual embutido)
+        self._btn_edit_primary = QPushButton("Editar")
+        self._btn_edit_primary.setObjectName("btnEditColor")
+        self._btn_edit_primary.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_edit_primary.setStyleSheet(self._get_color_btn_css(self._current_primary))
+        self._btn_edit_primary.clicked.connect(lambda: self._open_color_picker("primary"))
+        primary_row.addWidget(self._btn_edit_primary, 0, Qt.AlignmentFlag.AlignVCenter)
+        
+        layout.addLayout(primary_row)
+        
+        # ── Seção: Cor de Fundo ──
+        bg_row = QHBoxLayout()
+        
+        bg_name = QLabel("Cor de Fundo")
+        bg_name.setObjectName("settingName")
+        bg_row.addWidget(bg_name)
+        
+        bg_row.addStretch()
+        
+        # Botão Editar (indicador visual embutido)
+        self._btn_edit_bg = QPushButton("Editar")
+        self._btn_edit_bg.setObjectName("btnEditColor")
+        self._btn_edit_bg.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_edit_bg.setStyleSheet(self._get_color_btn_css(self._current_bg))
+        self._btn_edit_bg.clicked.connect(lambda: self._open_color_picker("background"))
+        bg_row.addWidget(self._btn_edit_bg, 0, Qt.AlignmentFlag.AlignVCenter)
+        
+        layout.addLayout(bg_row)
+        
+        # Separador visual sutil
+        sep = QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(f"background-color: {_BG_OVERLAY}; margin-top: 8px; margin-bottom: 8px;")
+        layout.addWidget(sep)
+
+        # ── Toggle Seguir Sistema ──
+        row = QHBoxLayout()
+        desc_col = QVBoxLayout()
+
+        name = QLabel("Seguir tema do sistema")
+        name.setObjectName("settingName")
+        desc_col.addWidget(name)
+
+        desc = QLabel("Sincroniza as cores do PEEK com o tema do KDE Plasma")
+        desc.setObjectName("settingDesc")
+        desc_col.addWidget(desc)
+
+        row.addLayout(desc_col)
+        row.addStretch()
+
+        self._theme_toggle = SlideSwitch()
+        self._theme_toggle.setChecked(False)
+        row.addWidget(self._theme_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        layout.addLayout(row)
+        return card
+
+    @Slot(str)
+    def _open_color_picker(self, color_type: str) -> None:
+        if color_type == "primary":
+            current_color = self._current_primary
+            btn = self._btn_edit_primary
+        else:
+            current_color = self._current_bg
+            btn = self._btn_edit_bg
+            
+        dialog = ColorPickerDialog(current_color, self)
+        
+        from PySide6.QtWidgets import QApplication
+        original_css = QApplication.instance().styleSheet()
+        if not original_css:
+            original_css = self._global_stylesheet()
+            
+        dialog.color_previewed.connect(lambda hex_code: self._preview_theme(color_type, hex_code, dialog))
+        dialog.preview_canceled.connect(lambda: QApplication.instance().setStyleSheet(original_css))
+        dialog.color_applied.connect(lambda hex_code: self._apply_theme(color_type, hex_code, btn))
+        
+        dialog.exec()
+
+    def _preview_theme(self, color_type: str, hex_code: str, dialog: ColorPickerDialog) -> None:
+        from PySide6.QtWidgets import QApplication
+        primary = hex_code if color_type == "primary" else _ACCENT_MAUVE
+        background = hex_code if color_type == "background" else _BG_BASE
+        
+        parsed_css = self._global_stylesheet(primary, background)
+        QApplication.instance().setStyleSheet(parsed_css)
+        
+        if dialog.live_preview_cb.isChecked():
+            # Force sidebar visible for live preview
+            subprocess.run(["qdbus", "org.peek.App", "/App", "SlideIn"], capture_output=True, check=False)
+
+    def _apply_theme(self, color_type: str, hex_code: str, btn: QPushButton) -> None:
+        if color_type == "primary":
+            self._current_primary = hex_code
+        else:
+            self._current_bg = hex_code
+            
+        btn.setStyleSheet(self._get_color_btn_css(hex_code))
+        print(f"New {color_type.capitalize()}: {hex_code}")
+        
     def _build_footer(self) -> QHBoxLayout:
         layout = QHBoxLayout()
         layout.setSpacing(12)
 
-        version = QLabel("PEEK v0.2 — KDE Plasma · Wayland")
+        version = QLabel("PEEK v0.4 — KDE Plasma · Wayland")
         version.setObjectName("footerText")
         layout.addWidget(version)
         layout.addStretch()
@@ -588,16 +899,77 @@ class ControlCenter(QWidget):
 
     # ── Stylesheet ────────────────────────────────────────────────────────
 
+    def _get_color_btn_css(self, current_color: str) -> str:
+        return f"""
+            QPushButton {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                            stop: 0 {current_color},
+                                            stop: 0.25 {current_color},
+                                            stop: 0.251 {_BG_OVERLAY},
+                                            stop: 1 {_BG_OVERLAY});
+                color: {_TEXT_MAIN};
+                border: none;
+                border-radius: {_RADIUS_SM};
+                padding: 6px 12px;
+                padding-left: 20px;
+                text-align: center;
+                font-size: 11px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                            stop: 0 {current_color},
+                                            stop: 0.25 {current_color},
+                                            stop: 0.251 #45475a,
+                                            stop: 1 #45475a);
+            }}
+            QPushButton:pressed {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                            stop: 0 {current_color},
+                                            stop: 0.25 {current_color},
+                                            stop: 0.251 #2a2a3c,
+                                            stop: 1 #2a2a3c);
+            }}
+        """
+
     @staticmethod
-    def _global_stylesheet() -> str:
+    def _global_stylesheet(primary_color: str = _ACCENT_MAUVE, bg_color: str = _BG_BASE) -> str:
         return f"""
             ControlCenter {{
-                background-color: {_BG_BASE};
+                background-color: {bg_color};
+            }}
+
+            /* ── Scroll Area ── */
+            #mainScroll {{
+                background-color: transparent;
+                border: none;
+            }}
+            QScrollArea > QWidget > QWidget {{
+                background-color: transparent;
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 10px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {_BG_OVERLAY};
+                min-height: 20px;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: #45475a;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
             }}
 
             /* ── Header ── */
             #headerIcon {{
-                color: {_ACCENT_MAUVE};
+                color: {primary_color};
                 font-size: 28px;
             }}
             #headerTitle {{
@@ -613,13 +985,11 @@ class ControlCenter(QWidget):
 
             /* ── LED de Status (cabeçalho) ── */
             #ledStatusActive {{
-                color: {_ACCENT_GREEN};
-                font-size: 16px;
+                background-color: {_ACCENT_GREEN};
                 border-radius: 8px;
             }}
             #ledStatusPaused {{
-                color: {_ACCENT_RED};
-                font-size: 16px;
+                background-color: {_ACCENT_RED};
                 border-radius: 8px;
             }}
 
@@ -641,7 +1011,7 @@ class ControlCenter(QWidget):
 
             /* ── Seções ── */
             #sectionLabel {{
-                color: {_ACCENT_MAUVE};
+                color: {primary_color};
                 font-size: 10px;
                 font-weight: bold;
                 letter-spacing: 1.5px;
@@ -679,24 +1049,21 @@ class ControlCenter(QWidget):
                 background-color: {_BG_OVERLAY};
             }}
             #toggleSwitch::indicator:checked {{
-                background-color: {_ACCENT_MAUVE};
+                background-color: {primary_color};
             }}
 
             /* ── LED de Saúde ── */
             #ledOk {{
-                color: {_ACCENT_GREEN};
-                font-size: 10px;
-                padding-left: 6px;
+                background-color: {_ACCENT_GREEN};
+                border-radius: 6px;
             }}
             #ledWarn {{
-                color: #f9e2af;
-                font-size: 10px;
-                padding-left: 6px;
+                background-color: #f9e2af;
+                border-radius: 6px;
             }}
             #ledError {{
-                color: {_ACCENT_RED};
-                font-size: 10px;
-                padding-left: 6px;
+                background-color: {_ACCENT_RED};
+                border-radius: 6px;
             }}
 
             /* ── Separador ── */
@@ -732,6 +1099,21 @@ class ControlCenter(QWidget):
                 padding-top: 6px;
                 padding-bottom: 4px;
             }}
+            #btnRefreshIcon {{
+                background-color: {_BG_OVERLAY};
+                color: {_TEXT_MAIN};
+                border: none;
+                border-radius: {_RADIUS_SM};
+                font-size: 16px;
+                font-weight: bold;
+                padding: 0;
+            }}
+            #btnRefreshIcon:hover {{
+                background-color: #45475a;
+            }}
+            #btnRefreshIcon:pressed {{
+                background-color: #2a2a3c;
+            }}
             #btnClose {{
                 background-color: {_BG_OVERLAY};
                 color: {_TEXT_MAIN};
@@ -750,7 +1132,7 @@ class ControlCenter(QWidget):
             }}
             #btnShortcut {{
                 background-color: rgba(203, 166, 247, 0.15);
-                color: {_ACCENT_MAUVE};
+                color: {primary_color};
                 border: 1px solid rgba(203, 166, 247, 0.35);
                 border-radius: {_RADIUS_SM};
                 padding: 6px 14px;

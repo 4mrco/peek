@@ -107,7 +107,7 @@ class Controller(QObject):
 
         # UI → Audio (Backend)
         vol_slider.volume_changed.connect(self._audio.set_master_volume)
-        self._sidebar.app_volume_changed.connect(self._audio.set_app_volume)
+        self._sidebar.app_volume_changed.connect(self._on_app_volume_changed)
         self._sidebar.app_mute_toggled.connect(self._audio.toggle_stream_mute)
         self._sidebar.mic_mute_requested.connect(self._audio.toggle_mic_mute)
         self._sidebar.output_cycle_requested.connect(self._audio.cycle_default_sink)
@@ -116,6 +116,18 @@ class Controller(QObject):
         self._mpris.force_sync_ui()
 
     # ── Handlers internos (NÃO são @Slot, não aparecem no D-Bus) ────
+
+    def _on_app_volume_changed(self, stream_index: int, vol_percent: int) -> None:
+        """Sincroniza o volume do app no PulseAudio e, se for o player ativo, no MPRIS."""
+        self._audio.set_app_volume(stream_index, vol_percent)
+        
+        stream_name = self._audio.get_stream_name(stream_index)
+        active_player = self._mpris.active_player_name
+        
+        if stream_name and active_player:
+            # Comparação case-insensitive (ex: "spotify" in "Spotify")
+            if stream_name.lower() in active_player.lower() or active_player.lower() in stream_name.lower():
+                self._mpris.set_volume(vol_percent / 100.0)
 
     def _on_mouse_entered(self) -> None:
         """Mouse entrou na sidebar: cancela hide timer E survival timer."""

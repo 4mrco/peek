@@ -323,6 +323,18 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 | #25    | Clickable Player Header & Chevron | ✅ |
 | #25.1  | UI Polish & MPRIS Extrapolation (No Polling) | ✅ |
 | #25.2  | Pixel Perfect: Layout Alignment & Spacing | ✅ |
+| #26.1  | Investigation Failed: Fix UI Paint Event & Volume Sync | ✅ |
+| #26.2  | Fix Your Lie: Implement get_stream_name | ✅ |
+| #26.4  | Implementation: Fix Snapback & Double-Seek | ✅ |
+| #26.5  | Fix Your Mess: Restore QSlider Mouse Tracking | ✅ |
+| #26.7  | Implementation: Manual Mouse Tracking Override | ✅ |
+| #27    | Control Center UI Polish & Theme Skeleton | ✅ |
+| #27.1  | UI Fix: Scroll Area & True Color Customization | ✅ |
+| #28    | Professional Color Picker UI | ✅ |
+| #29    | File Consolidation, Log Fix & Live Theme Engine | ✅ |
+| #30    | UI Declutter & Unified Color Buttons | ✅ |
+| #31    | Fix Qt Border Bevel Glitch (The Dent) | ✅ |
+| #32    | Bump Version to v0.4 & Project Inventory | ✅ |
 
 ---
 

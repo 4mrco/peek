@@ -482,3 +482,30 @@ class MprisClient(QObject):
         if not self._player_iface or not self._player_iface.isValid():
             return
         self._player_iface.call(method)
+
+    def set_volume(self, volume: float) -> None:
+        """Sincroniza o volume (0.0 a 1.0) forçando o MPRIS a igualar ao PulseAudio."""
+        if not self._player_service:
+            return
+            
+        try:
+            subprocess.run(
+                [
+                    "busctl", "--user", "call",
+                    self._player_service,
+                    MPRIS_PATH,
+                    "org.freedesktop.DBus.Properties",
+                    "Set", "ssv",
+                    MPRIS_PLAYER_IFACE,
+                    "Volume", "d",
+                    str(volume),
+                ],
+                capture_output=True,
+                timeout=1,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            print(f"[PEEK:MPRIS] Erro ao sincronizar Volume no MPRIS: {e}")
+
+    @property
+    def active_player_name(self) -> str:
+        return self._last_player_name
