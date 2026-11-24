@@ -161,6 +161,8 @@ class Controller(QObject):
         self._sidebar.sink_selected.connect(self._audio.set_default_sink)
         self._sidebar.source_selected.connect(self._audio.set_default_source)
         self._sidebar.player_selected.connect(self._mpris.select_player)
+        self._sidebar.balance_changed.connect(self._audio.set_master_balance)
+        self._sidebar.mono_toggled.connect(self._audio.set_mono_mode)
         
         # Força o MPRIS a popular a UI após todas as conexões terem sido feitas
         self._mpris.force_sync_ui()
@@ -197,7 +199,8 @@ class Controller(QObject):
         self._sidebar.show_output_menu(
             self._audio.get_sinks(),
             self._audio.is_master_muted(),
-            self._audio.is_mic_muted(),
+            self._audio.get_master_balance(),
+            self._audio.is_mono_enabled(),
             global_pos,
         )
 

@@ -339,13 +339,15 @@ class ControlCenter(QWidget):
 
     def _setup_window(self) -> None:
         self.setWindowTitle("PEEK — Control Center")
-        self.setMinimumWidth(460)
-        self.setMaximumWidth(560)
-        self.setFixedHeight(650)
+        self.setMinimumSize(540, 500)
+        self.resize(620, 680)
         self.setStyleSheet(self._global_stylesheet(self._current_primary, self._current_bg))
-        # Qt.Window garante janela de topo raiz independente no Wayland.
-        # WindowCloseButtonHint mantém o botão ✕ nativo.
-        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint)
+        # Qt.Window garante janela de topo raiz independente e redimensionável no Wayland.
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowMinMaxButtonsHint
+        )
 
     def showEvent(self, event) -> None:  # noqa: N802
         """Centraliza na tela e corta o parentesco transiente nativo.
@@ -384,6 +386,7 @@ class ControlCenter(QWidget):
         
         scroll_area = QScrollArea(self)
         scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         scroll_area.setObjectName("mainScroll")
         main_layout.addWidget(scroll_area)
@@ -415,6 +418,9 @@ class ControlCenter(QWidget):
 
         # ── Footer ──────────────────────────────────────────────────────
         root.addLayout(self._build_footer())
+
+        ideal_w = min(720, max(600, content_widget.sizeHint().width() + 24))
+        self.resize(ideal_w, 680)
 
     # ── Builders dos blocos de UI ─────────────────────────────────────────
 
@@ -461,6 +467,7 @@ class ControlCenter(QWidget):
 
         # Linha toggle
         row = QHBoxLayout()
+        row.setSpacing(16)
         desc_col = QVBoxLayout()
 
         name = QLabel("PEEK Overlay")
@@ -469,10 +476,10 @@ class ControlCenter(QWidget):
 
         desc = QLabel("Ativa a detecção do canto da tela via KWin")
         desc.setObjectName("settingDesc")
+        desc.setWordWrap(True)
         desc_col.addWidget(desc)
 
-        row.addLayout(desc_col)
-        row.addStretch()
+        row.addLayout(desc_col, 1)
 
         self._service_toggle = SlideSwitch()
         self._service_toggle.setChecked(self._service_active)
@@ -483,6 +490,7 @@ class ControlCenter(QWidget):
 
         # Linha escolha de canto de ativação (somente cantos superiores)
         edge_row = QHBoxLayout()
+        edge_row.setSpacing(16)
         edge_desc_col = QVBoxLayout()
 
         edge_name = QLabel("Canto de Ativação")
@@ -491,13 +499,14 @@ class ControlCenter(QWidget):
 
         edge_desc = QLabel("Define em qual canto superior o mouse invoca o painel")
         edge_desc.setObjectName("settingDesc")
+        edge_desc.setWordWrap(True)
         edge_desc_col.addWidget(edge_desc)
 
-        edge_row.addLayout(edge_desc_col)
-        edge_row.addStretch()
+        edge_row.addLayout(edge_desc_col, 1)
 
         self._edge_combo = QComboBox()
         self._edge_combo.setObjectName("edgeCombo")
+        self._edge_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self._edge_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self._edge_combo.addItem("Canto Superior Direito", "TopRight")
         self._edge_combo.addItem("Canto Superior Esquerdo", "TopLeft")
@@ -520,6 +529,7 @@ class ControlCenter(QWidget):
         layout.addWidget(lbl)
 
         row = QHBoxLayout()
+        row.setSpacing(16)
         desc_col = QVBoxLayout()
 
         name = QLabel("Abrir / Fechar PEEK")
@@ -528,10 +538,10 @@ class ControlCenter(QWidget):
 
         desc = QLabel("Atalho global via KDE (Wayland)")
         desc.setObjectName("settingDesc")
+        desc.setWordWrap(True)
         desc_col.addWidget(desc)
 
-        row.addLayout(desc_col)
-        row.addStretch()
+        row.addLayout(desc_col, 1)
 
         self._shortcut_btn = QPushButton("⌨ Configurar no KDE")
         self._shortcut_btn.setObjectName("btnShortcut")
@@ -560,6 +570,7 @@ class ControlCenter(QWidget):
         layout.addWidget(lbl)
 
         row = QHBoxLayout()
+        row.setSpacing(16)
         desc_col = QVBoxLayout()
 
         name = QLabel("Iniciar com o sistema")
@@ -568,10 +579,10 @@ class ControlCenter(QWidget):
 
         desc = QLabel("Inicia o PEEK automaticamente com o KDE (XDG Autostart)")
         desc.setObjectName("settingDesc")
+        desc.setWordWrap(True)
         desc_col.addWidget(desc)
 
-        row.addLayout(desc_col)
-        row.addStretch()
+        row.addLayout(desc_col, 1)
 
         self._autostart_toggle = SlideSwitch()
         self._autostart_toggle.setChecked(self._is_autostart_enabled())
@@ -718,6 +729,7 @@ class ControlCenter(QWidget):
 
         # ── Toggle Seguir Sistema ──
         row = QHBoxLayout()
+        row.setSpacing(16)
         desc_col = QVBoxLayout()
 
         name = QLabel("Seguir tema do sistema")
@@ -726,10 +738,10 @@ class ControlCenter(QWidget):
 
         desc = QLabel("Sincroniza as cores do PEEK com o tema do KDE Plasma")
         desc.setObjectName("settingDesc")
+        desc.setWordWrap(True)
         desc_col.addWidget(desc)
 
-        row.addLayout(desc_col)
-        row.addStretch()
+        row.addLayout(desc_col, 1)
 
         self._theme_toggle = SlideSwitch()
         self._theme_toggle.setChecked(False)

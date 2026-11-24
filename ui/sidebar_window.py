@@ -18,6 +18,9 @@ Wayland/KDE Plasma:
     forneça uma KWin Rule para forçar a posição (veja scripts/).
 """
 
+import time
+from typing import Any
+
 from PySide6.QtCore import (
     QEasingCurve,
     QEvent,
@@ -30,8 +33,17 @@ from PySide6.QtCore import (
     Slot
 )
 from PySide6.QtGui import QAction, QColor, QEnterEvent, QGuiApplication, QIcon
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QLayout, QMenu, QVBoxLayout, QWidget, QFrame
-from typing import Any
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLayout,
+    QMenu,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+    QWidgetAction,
+)
 
 from ui.components.clickable_icon import ClickableIcon
 from ui.components.media_player import MediaPlayerWidget
@@ -57,6 +69,8 @@ class SidebarWindow(QWidget):
     sink_selected         = Signal(str)
     source_selected       = Signal(str)
     player_selected       = Signal(str)
+    balance_changed       = Signal(float)
+    mono_toggled          = Signal(bool)
 
     WIDTH: int = 360
     ANIMATION_DURATION_MS: int = 250
@@ -74,9 +88,11 @@ class SidebarWindow(QWidget):
         self._primary_color: str = "#cba6f7"
         self._bg_opacity: int = 92
         self._open_menus: int = 0
+        self._menu_closed_at: float = 0.0
 
-        # Ativa o rastreamento nativo do mouse (inclusive nos filhos principais)
+        # Ativa o rastreamento nativo do mouse + HoverMove (p/ guarda pós-QMenu no Wayland)
         self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
         self._app_sliders: dict[int, VolumeSlider] = {}
 
@@ -539,8 +555,21 @@ class SidebarWindow(QWidget):
         return menu
 
     def _popup_menu(self, menu: QMenu, global_pos: QPoint) -> None:
-        menu.aboutToShow.connect(self._on_menu_about_to_show)
-        menu.aboutToHide.connect(self._on_menu_about_to_hide)
+        state = {"open": False}
+
+        def _on_show() -> None:
+            if not state["open"]:
+                state["open"] = True
+                self._on_menu_about_to_show()
+
+        def _on_close() -> None:
+            if state["open"]:
+                state["open"] = False
+                self._on_menu_about_to_hide()
+
+        menu.aboutToShow.connect(_on_show)
+        menu.aboutToHide.connect(_on_close)
+        menu.destroyed.connect(_on_close)
         menu.popup(global_pos)
 
     def _on_menu_about_to_show(self) -> None:
@@ -550,16 +579,26 @@ class SidebarWindow(QWidget):
     def _on_menu_about_to_hide(self) -> None:
         self._open_menus = max(0, self._open_menus - 1)
         if self._open_menus == 0:
+            self._menu_closed_at = time.monotonic()
             self.menu_closed.emit()
+
+    @staticmethod
+    def _format_balance_text(val: int) -> str:
+        if abs(val) < 3:
+            return "Balanço: Centro"
+        if val < 0:
+            return f"Balanço: L {abs(val)}%"
+        return f"Balanço: R {val}%"
 
     def show_output_menu(
         self,
         sinks: list[dict[str, Any]],
         master_muted: bool,
-        mic_muted: bool,
+        balance: float,
+        mono_enabled: bool,
         global_pos: QPoint,
     ) -> None:
-        """Abre menu de contexto com seleção direta de saída de áudio e mutes."""
+        """Abre menu de contexto da saída de áudio (sinks, balanço, mono/estéreo e mute)."""
         menu = self._build_context_menu()
         header = menu.addAction("Saída de Áudio")
         header.setEnabled(False)
@@ -579,10 +618,76 @@ class SidebarWindow(QWidget):
             empty.setEnabled(False)
 
         menu.addSeparator()
+
+        # Controle inline de Balanço L/R (clique no título centraliza em 0)
+        bal_container = QWidget(menu)
+        bal_layout = QVBoxLayout(bal_container)
+        bal_layout.setContentsMargins(12, 6, 12, 6)
+        bal_layout.setSpacing(4)
+
+        init_val = max(-100, min(100, round(float(balance) * 100)))
+
+        bal_header = QHBoxLayout()
+        bal_header.setContentsMargins(0, 0, 0, 0)
+        lbl_l = QLabel("L")
+        lbl_l.setStyleSheet("color: #a6adc8; font-size: 11px; font-weight: bold;")
+        lbl_center = ClickableIcon()
+        lbl_center.setText(self._format_balance_text(init_val))
+        lbl_center.setStyleSheet("color: #cdd6f4; font-size: 11px;")
+        lbl_r = QLabel("R")
+        lbl_r.setStyleSheet("color: #a6adc8; font-size: 11px; font-weight: bold;")
+        bal_header.addWidget(lbl_l)
+        bal_header.addStretch()
+        bal_header.addWidget(lbl_center)
+        bal_header.addStretch()
+        bal_header.addWidget(lbl_r)
+        bal_layout.addLayout(bal_header)
+
+        bal_slider = QSlider(Qt.Orientation.Horizontal, bal_container)
+        bal_slider.setObjectName("balanceMenuSlider")
+        bal_slider.setRange(-100, 100)
+        bal_slider.setSingleStep(5)
+        bal_slider.setValue(init_val)
+        bal_slider.setFixedWidth(180)
+        bal_slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        bal_slider.setStyleSheet(
+            f"""
+            QSlider::groove:horizontal {{
+                background: #313244;
+                height: 5px;
+                border-radius: 2px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {self._primary_color};
+                width: 12px;
+                height: 12px;
+                margin: -4px 0;
+                border-radius: 6px;
+            }}
+            """
+        )
+
+        def _on_bal_changed(val: int) -> None:
+            lbl_center.setText(self._format_balance_text(val))
+            self.balance_changed.emit(val / 100.0)
+
+        bal_slider.valueChanged.connect(_on_bal_changed)
+        lbl_center.leftClicked.connect(lambda: bal_slider.setValue(0))
+        bal_layout.addWidget(bal_slider)
+
+        bal_action = QWidgetAction(menu)
+        bal_action.setDefaultWidget(bal_container)
+        menu.addAction(bal_action)
+
+        act_mono = QAction("Áudio Mono (Downmix)", menu)
+        act_mono.setCheckable(True)
+        act_mono.setChecked(bool(mono_enabled))
+        act_mono.triggered.connect(lambda checked=False: self.mono_toggled.emit(bool(checked)))
+        menu.addAction(act_mono)
+
+        menu.addSeparator()
         act_mute_out = menu.addAction("Desmutar Saída Master" if master_muted else "Mutar Saída Master")
         act_mute_out.triggered.connect(self.master_mute_requested.emit)
-        act_mute_mic = menu.addAction("Desmutar Microfone" if mic_muted else "Mutar Microfone")
-        act_mute_mic.triggered.connect(self.mic_mute_requested.emit)
 
         self._popup_menu(menu, global_pos)
 
@@ -686,8 +791,19 @@ class SidebarWindow(QWidget):
             return
         self._reanchor_edge()
 
+    def event(self, event: QEvent) -> bool:  # noqa: N802
+        if (
+            event.type() == QEvent.Type.HoverMove
+            and self._open_menus == 0
+            and self._is_visible
+        ):
+            self.mouse_entered.emit()
+        return super().event(event)
+
     def enterEvent(self, event: QEnterEvent) -> None:  # noqa: N802
-        self.mouse_entered.emit()
+        # Ignora Enter sintético disparado pelo Wayland/Qt logo após fechar um QMenu popup
+        if (time.monotonic() - self._menu_closed_at) >= 0.15:
+            self.mouse_entered.emit()
         super().enterEvent(event)
 
     def leaveEvent(self, event: QEvent) -> None:  # noqa: N802

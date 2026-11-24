@@ -1,6 +1,6 @@
 # PROJECT_STATE.md — PEEK
 
-> **Última atualização:** 2026-11-24 — Task #35 (Fase 3 Subtle Menus, Config Persistence, Opacity, TopRight/TopLeft Edge & Magic Gradient)  
+> **Última atualização:** 2026-11-24 — Task #36 (Control Center Resizable/Fit, Output Menu Balance + Mono/Stereo & Wayland Post-Menu Auto-Hide Fix)  
 > **Regra:** Este arquivo DEVE ser atualizado ao final de cada funcionalidade grande.
 
 ---
@@ -277,6 +277,12 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 - **Borda Configurável (Cantos Superiores `TopRight` = 1 / `TopLeft` = 7):** `kwin-script/kslide-edge-trigger` lê `TriggerEdge` via `contents/config/main.xml` + `readConfig("TriggerEdge", 1)` e atualiza via `kwriteconfig6` + `reconfigure`. No `TopLeft`, `SidebarWindow` espelha horizontalmente a âncora (`x = 0`), a margem de tolerância (`RIGHT_HOVER_MARGIN = 20`) e os raios/borda do `main_card` sem reordenar os widgets internos.
 - **Magic Gradient:** `SidebarWindow.apply_appearance()` aplica `qlineargradient` vertical/diagonal com paradas `rgba(...)` controladas por `bg_opacity`, borda sutil translúcida e cor de destaque sincronizada nos botões e sliders.
 
+### 15. Control Center Sizing, Áudio Balanço + Mono/Estéreo & Fix Pós-Menu Wayland (Task #36)
+
+- **Control Center Redimensionável e Sem Scroll Horizontal:** Removidos `setMaximumWidth(560)` e `setFixedHeight(650)`; janela abre com largura ajustada ao conteúdo (`min 600px`, redimensionável `540×500`+), `ScrollBarAlwaysOff` horizontal, `wordWrap` nas descrições e `AdjustToContents` no combo de borda.
+- **Menu de Saída Focado + Balanço L/R & Mono/Estéreo:** Removida a opção de mutar microfone do menu de saída de áudio (permanece apenas no menu/ícone do Mic). Adicionados slider inline de **Balanço L/R** (`QWidgetAction` com clique no rótulo para centralizar, preservando pico e balanço ao ajustar Master volume) e toggle **Áudio Mono (Downmix)** via `module-remap-sink` (`peek_mono_sink`) usando `pulsectl` efêmero.
+- **Fix de Auto-Hide Pós-QMenu no Wayland:** Ao fechar um `QMenu.popup()` clicando fora no Wayland, o Qt dispara `enterEvent` sintético imediato que cancelava o `_hide_timer`. `SidebarWindow` agora suprime `enterEvent` nos `150ms` após fechar o menu (`_menu_closed_at`) e usa `HoverMove` (`WA_Hover`) apenas quando há movimento real sobre o painel.
+
 ---
 
 ## Componentes e Sinais
@@ -285,10 +291,10 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 |---|---|---|
 | `MprisClient` | `track_changed(str,str)`, `playback_state_changed(bool)`, `art_url_changed(str)`, `player_name_changed(str)`, `position_changed(qlonglong)`, `duration_changed(qlonglong)` | `play_pause()`, `next_track()`, `previous_track()`, `select_player(str)` |
 | `ArtDownloader` | `art_ready(QPixmap)`, `art_cleared()` | `fetch(str)` |
-| `AudioClient` | `master_volume_changed(int)`, `master_mute_changed(bool)`, `app_volumes_changed(list)`, `mic_mute_changed(bool)` | `set_master_volume(int)`, `toggle_master_mute()`, `set_app_volume(int, int)`, `toggle_stream_mute(int)`, `toggle_mic_mute()`, `cycle_default_sink()`, `set_default_sink(str)`, `set_default_source(str)` |
+| `AudioClient` | `master_volume_changed(int)`, `master_mute_changed(bool)`, `app_volumes_changed(list)`, `mic_mute_changed(bool)` | `set_master_volume(int)`, `toggle_master_mute()`, `set_app_volume(int, int)`, `toggle_stream_mute(int)`, `toggle_mic_mute()`, `cycle_default_sink()`, `set_default_sink(str)`, `set_default_source(str)`, `set_master_balance(float)`, `set_mono_mode(bool)` |
 | `MediaPlayerWidget` | `play_pause_clicked()`, `next_clicked()`, `previous_clicked()`, `seek_requested(int)`, `player_menu_requested(QPoint)` | `update_track(str,str)`, `update_playback_state(bool)`, `update_art(QPixmap)`, `clear_art()`, `update_player_name(str)`, `update_position(qlonglong)`, `update_duration(qlonglong)` |
 | `VolumeSlider` | `volume_changed(int)`, `mute_toggled(int)`, `master_mute_toggled()`, `context_menu_requested(QPoint)` | `set_volume(int)` |
-| `SidebarWindow` | `mouse_entered()`, `mouse_left()`, `menu_opened()`, `menu_closed()`, `app_volume_changed(int, int)`, `master_mute_requested()`, `output_menu_requested(QPoint)`, `mic_menu_requested(QPoint)`, `player_menu_requested(QPoint)`, `sink_selected(str)`, `source_selected(str)`, `player_selected(str)` | `slide_in()`, `slide_out()`, `update_app_sliders(list)` |
+| `SidebarWindow` | `mouse_entered()`, `mouse_left()`, `menu_opened()`, `menu_closed()`, `app_volume_changed(int, int)`, `master_mute_requested()`, `mic_mute_requested()`, `output_menu_requested(QPoint)`, `mic_menu_requested(QPoint)`, `player_menu_requested(QPoint)`, `sink_selected(str)`, `source_selected(str)`, `player_selected(str)`, `balance_changed(float)`, `mono_toggled(bool)` | `slide_in()`, `slide_out()`, `update_app_sliders(list)` |
 
 ---
 
@@ -366,6 +372,7 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 | #33    | Lazy UI & Worker Initialization for Daemon Idle RAM Reduction | ✅ |
 | #34    | UX/UI Bugfixes: Hidden Layout Sync, Int64 Seek, Left Hover Margin & Native Click-Through | ✅ |
 | #35    | Fase 3 Subtle Menus, Config Persistence, Opacity, TopRight/TopLeft & Magic Gradient | ✅ |
+| #36    | Control Center Resizable/Fit, Output Menu Balance + Mono/Stereo & Wayland Post-Menu Fix | ✅ |
 
 ---
 
