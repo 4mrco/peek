@@ -21,7 +21,7 @@ from ui.components.clickable_icon import ClickableLabel
 import time
 
 from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtGui import QPainter, QPainterPath, QPixmap, QPaintEvent
+from PySide6.QtGui import QColor, QContextMenuEvent, QPainter, QPainterPath, QPixmap, QPaintEvent
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QStyleOptionSlider,
     QWidget
 )
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Property, QTimer
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Property, QTimer
 from PySide6.QtGui import QEnterEvent, QMouseEvent
 
 # Tamanho da capa do álbum em pixels
@@ -86,6 +86,7 @@ class MediaPlayerWidget(QFrame):
     next_clicked = Signal()
     previous_clicked = Signal()
     seek_requested = Signal(int) # Emite a posição solicitada
+    player_menu_requested = Signal(QPoint)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -93,6 +94,7 @@ class MediaPlayerWidget(QFrame):
         self._current_pos_s: int = 0
         self._duration_s: int = 0
         self._last_seek_time: float = 0.0  # Marcação temporal do último seek do usuário
+        self._accent_color: str = "#cba6f7"
         
         self._local_pos_timer = QTimer(self)
         self._local_pos_timer.setInterval(1000)
@@ -103,7 +105,7 @@ class MediaPlayerWidget(QFrame):
 
     def _setup_ui(self) -> None:
         self.setObjectName("MediaPlayerWidget")
-        self.setStyleSheet(self._stylesheet())
+        self.setStyleSheet(self._stylesheet(self._accent_color))
 
         # Card abraça o conteúdo: expande horizontalmente, fixo verticalmente
         self.setMinimumWidth(300)
@@ -128,7 +130,7 @@ class MediaPlayerWidget(QFrame):
         self._section_player = ClickableLabel("MÍDIA")
         self._section_player.setObjectName("sectionPlayerLabel")
         self._section_player.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self._section_player.leftClicked.connect(lambda: print("UI: Abrir seletor de players"))
+        self._section_player.leftClicked.connect(self._on_header_player_clicked)
         
         header_row.addWidget(self._section_prefix)
         header_row.addWidget(self._section_player)
@@ -378,39 +380,56 @@ class MediaPlayerWidget(QFrame):
         self._seek_slider.set_time_total(self._format_time(sec))
         self._seek_slider.setRange(0, sec)
 
+    def _on_header_player_clicked(self) -> None:
+        pos = self._section_player.mapToGlobal(QPoint(0, self._section_player.height() + 4))
+        self.player_menu_requested.emit(pos)
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:  # noqa: N802
+        self.player_menu_requested.emit(event.globalPos())
+        event.accept()
+
+    def apply_accent_color(self, primary_color: str) -> None:
+        """Atualiza a cor de destaque do botão Play e da barra de progresso."""
+        self._accent_color = primary_color
+        self.setStyleSheet(self._stylesheet(primary_color))
+        self._seek_slider.set_accent_color(primary_color)
+
     # ── Estilo ───────────────────────────────────────────────────────
 
     @staticmethod
-    def _stylesheet() -> str:
-        return """
-            #MediaPlayerWidget {
+    def _stylesheet(accent_color: str = "#cba6f7") -> str:
+        c = QColor(accent_color)
+        hover_color = c.lighter(112).name() if c.isValid() else "#b4befe"
+        pressed_color = c.darker(115).name() if c.isValid() else "#89b4fa"
+        return f"""
+            #MediaPlayerWidget {{
                 background: transparent;
-            }
+            }}
 
-            #sectionPrefixLabel, #sectionPlayerLabel {
+            #sectionPrefixLabel, #sectionPlayerLabel {{
                 color: #a6adc8;
                 font-size: 11px;
                 font-weight: bold;
                 letter-spacing: 1px;
-            }
+            }}
 
-            #trackTitle {
+            #trackTitle {{
                 color: #cdd6f4;
                 font-size: 14px;
                 font-weight: bold;
-            }
+            }}
 
-            #trackArtist {
+            #trackArtist {{
                 color: #a6adc8;
                 font-size: 12px;
-            }
+            }}
 
-            #albumArt {
+            #albumArt {{
                 background-color: #313244;
                 border-radius: 12px;
-            }
+            }}
 
-            QPushButton {
+            QPushButton {{
                 background-color: #313244;
                 color: #cdd6f4;
                 border: none;
@@ -421,31 +440,31 @@ class MediaPlayerWidget(QFrame):
                 margin: 0px;
                 padding: 0px;
                 /* Sem min/max-width — setFixedSize() em Python é a fonte de verdade */
-            }
+            }}
 
-            QPushButton:hover {
+            QPushButton:hover {{
                 background-color: #45475a;
-            }
+            }}
 
-            QPushButton:pressed {
+            QPushButton:pressed {{
                 background-color: #585b70;
-            }
+            }}
 
-            #btnPlay {
-                background-color: #cba6f7;
+            #btnPlay {{
+                background-color: {accent_color};
                 color: #1e1e2e;
                 font-size: 16px;
                 border-radius: 14px;
                 padding-left: 3px;  /* Alinhamento ótico do triângulo ▶ */
-            }
+            }}
 
-            #btnPlay:hover {
-                background-color: #b4befe;
-            }
+            #btnPlay:hover {{
+                background-color: {hover_color};
+            }}
 
-            #btnPlay:pressed {
-                background-color: #89b4fa;
-            }
+            #btnPlay:pressed {{
+                background-color: {pressed_color};
+            }}
         """
 
 class _SeekSlider(QSlider):
@@ -458,6 +477,7 @@ class _SeekSlider(QSlider):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self._groove_height: int = THIN_HEIGHT
+        self._fill_color: str = "#cba6f7"
         self._time_current_str: str = "0:00"
         self._time_total_str: str = "0:00"
         
@@ -570,13 +590,17 @@ class _SeekSlider(QSlider):
             painter.setPen(QColor("#a6adc8"))
             painter.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._time_total_str)
 
+    def set_accent_color(self, color: str) -> None:
+        self._fill_color = color
+        self._apply_style()
+
     def _apply_style(self) -> None:
         h = self._groove_height
         handle_w = h if h > THIN_HEIGHT else 0
         handle_radius = h // 2
 
         groove_bg = "#313244"
-        fill_color = "#cba6f7"
+        fill_color = self._fill_color
         handle_color = "#cdd6f4"
 
         self.setStyleSheet(f"""

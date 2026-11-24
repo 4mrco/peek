@@ -1,6 +1,6 @@
 # PROJECT_STATE.md — PEEK
 
-> **Última atualização:** 2026-11-24 — Task #34 (UX/UI Bugfixes: Hidden Layout Sync, Int64 Seek, Left Hover Margin & Native Click-Through)  
+> **Última atualização:** 2026-11-24 — Task #35 (Fase 3 Subtle Menus, Config Persistence, Opacity, TopRight/TopLeft Edge & Magic Gradient)  
 > **Regra:** Este arquivo DEVE ser atualizado ao final de cada funcionalidade grande.
 
 ---
@@ -266,18 +266,29 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 - **Margem de Tolerância Esquerda (`LEFT_HOVER_MARGIN = 20`):** Adicionados 20px transparentes à esquerda de `main_card` via `main_layout.setContentsMargins(20, 0, 0, 0)` (mantendo margem direita 0px) para evitar `leaveEvent` imediato em pequenos desvios do cursor sem deslocar `main_card` da borda direita. `HIDE_DELAY_MS` ajustado para `350ms`.
 - **Click-Through Nativo Acima/Abaixo (`TOP_OFFSET = 24`):** Em vez de `setMask()` (frágil para input region e recálculo dinâmico de sliders no KDE Plasma 6 Wayland), as margens superior/inferior do `main_layout` foram zeradas e `_offscreen_rect()`/`_onscreen_rect()` deslocam `y` por `TOP_OFFSET = 24`. Assim a `wl_surface` tem exatamente a altura do `main_card`, deixando as áreas acima e abaixo 100% click-through nativamente.
 
+### 14. Fase 3 Subtle Menus, Config Persistence, TopRight/TopLeft & Magic Gradient (Task #35)
+
+- **Configuração Persistente & Sync D-Bus (`core/config.py`):** Salva `~/.config/peek/config.json` atomicamente (`primary_color`, `bg_color`, `bg_opacity` 30–100%, `trigger_edge` `"TopRight"` ou `"TopLeft"`). `Controller` expõe `ReloadConfig()`, `PreviewAppearance(bg, primary, opacity)` e `IsServiceActive()` via `org.peek.App` para sincronizar `peek-gui` com `peek-daemon` em tempo real.
+- **Fase 3 — Subtle Menus (`QMenu.popup()` + Wayland Guardrail):**
+  - **Saída / Master (`_speaker_icon` + Master `VolumeSlider`):** Lista sinks cacheados no `_AudioWorker` e permite selecionar saída padrão via `pulsectl` efêmero (movendo streams ativos), além de atalhos de mute Master/Mic. Left-click no ícone Master também aciona `toggle_master_mute()`.
+  - **Microfone (`_mic_icon`):** Lista sources não-monitor cacheadas e alterna entrada padrão + mute.
+  - **Media Player (`_section_player` click ou right-click no `MediaPlayerWidget`):** Lista players MPRIS via `MprisClient.list_players()` e fixa `_preferred_service` via `select_player()`.
+  - **Guarda Anti-Auto-Hide no Wayland:** Menus usam `QMenu.popup()` (`WA_DeleteOnClose`) com contador `_open_menus` (`aboutToShow` / `aboutToHide`), suprimindo `mouse_left` em `leaveEvent()` e travando `_hide_timer`/`_survival_timer` no `Controller` enquanto qualquer menu está aberto.
+- **Borda Configurável (Cantos Superiores `TopRight` = 1 / `TopLeft` = 7):** `kwin-script/kslide-edge-trigger` lê `TriggerEdge` via `contents/config/main.xml` + `readConfig("TriggerEdge", 1)` e atualiza via `kwriteconfig6` + `reconfigure`. No `TopLeft`, `SidebarWindow` espelha horizontalmente a âncora (`x = 0`), a margem de tolerância (`RIGHT_HOVER_MARGIN = 20`) e os raios/borda do `main_card` sem reordenar os widgets internos.
+- **Magic Gradient:** `SidebarWindow.apply_appearance()` aplica `qlineargradient` vertical/diagonal com paradas `rgba(...)` controladas por `bg_opacity`, borda sutil translúcida e cor de destaque sincronizada nos botões e sliders.
+
 ---
 
 ## Componentes e Sinais
 
 | Componente | Sinais Emitidos | Slots Expostos |
 |---|---|---|
-| `MprisClient` | `track_changed(str,str)`, `playback_state_changed(bool)`, `art_url_changed(str)`, `player_name_changed(str)`, `position_changed(qlonglong)`, `duration_changed(qlonglong)` | `play_pause()`, `next_track()`, `previous_track()` |
+| `MprisClient` | `track_changed(str,str)`, `playback_state_changed(bool)`, `art_url_changed(str)`, `player_name_changed(str)`, `position_changed(qlonglong)`, `duration_changed(qlonglong)` | `play_pause()`, `next_track()`, `previous_track()`, `select_player(str)` |
 | `ArtDownloader` | `art_ready(QPixmap)`, `art_cleared()` | `fetch(str)` |
-| `AudioClient` | `master_volume_changed(int)`, `master_mute_changed(bool)`, `app_volumes_changed(list)` | `set_master_volume(int)`, `toggle_master_mute()`, `set_app_volume(int, int)` |
-| `MediaPlayerWidget` | `play_pause_clicked()`, `next_clicked()`, `previous_clicked()`, `seek_requested(int)` | `update_track(str,str)`, `update_playback_state(bool)`, `update_art(QPixmap)`, `clear_art()`, `update_player_name(str)`, `update_position(qlonglong)`, `update_duration(qlonglong)` |
-| `VolumeSlider` | `volume_changed(int)` | `set_volume(int)` |
-| `SidebarWindow` | `mouse_entered()`, `mouse_left()`, `app_volume_changed(int, int)` | `slide_in()`, `slide_out()`, `update_app_sliders(list)` |
+| `AudioClient` | `master_volume_changed(int)`, `master_mute_changed(bool)`, `app_volumes_changed(list)`, `mic_mute_changed(bool)` | `set_master_volume(int)`, `toggle_master_mute()`, `set_app_volume(int, int)`, `toggle_stream_mute(int)`, `toggle_mic_mute()`, `cycle_default_sink()`, `set_default_sink(str)`, `set_default_source(str)` |
+| `MediaPlayerWidget` | `play_pause_clicked()`, `next_clicked()`, `previous_clicked()`, `seek_requested(int)`, `player_menu_requested(QPoint)` | `update_track(str,str)`, `update_playback_state(bool)`, `update_art(QPixmap)`, `clear_art()`, `update_player_name(str)`, `update_position(qlonglong)`, `update_duration(qlonglong)` |
+| `VolumeSlider` | `volume_changed(int)`, `mute_toggled(int)`, `master_mute_toggled()`, `context_menu_requested(QPoint)` | `set_volume(int)` |
+| `SidebarWindow` | `mouse_entered()`, `mouse_left()`, `menu_opened()`, `menu_closed()`, `app_volume_changed(int, int)`, `master_mute_requested()`, `output_menu_requested(QPoint)`, `mic_menu_requested(QPoint)`, `player_menu_requested(QPoint)`, `sink_selected(str)`, `source_selected(str)`, `player_selected(str)` | `slide_in()`, `slide_out()`, `update_app_sliders(list)` |
 
 ---
 
@@ -354,17 +365,17 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 | #32    | Bump Version to v0.4 & Project Inventory | ✅ |
 | #33    | Lazy UI & Worker Initialization for Daemon Idle RAM Reduction | ✅ |
 | #34    | UX/UI Bugfixes: Hidden Layout Sync, Int64 Seek, Left Hover Margin & Native Click-Through | ✅ |
+| #35    | Fase 3 Subtle Menus, Config Persistence, Opacity, TopRight/TopLeft & Magic Gradient | ✅ |
 
 ---
 
-> **Nota de Transição (Fase 3):** As otimizações estruturais do Wayland (Multi-Processo, IPC D-Bus e Âncora Transiente) foram concluídas com sucesso. O PEEK agora é blindado, roda em background autonomamente e possui um Control Center isolado. O projeto está estruturalmente maduro e pronto para iniciar a **Fase 3 (Subtle Menus)**, focada no clique com o botão direito para funcionalidades avançadas, e futuramente gravação global de atalhos.
+> **Nota de Transição (Fase 3):** As otimizações estruturais do Wayland (Multi-Processo, IPC D-Bus e Âncora Transiente) e a Fase 3 (Subtle Menus de contexto com guarda Wayland, persistência em `config.json`, transparência, borda TopRight/TopLeft e Magic Gradient) foram concluídas com sucesso.
 
-## Backlog Futuro
+## Backlog Futuro (Adiado / Postponed)
 
-- **Seekbar de duração da música** — barra de progresso com posição atual/total.
-- **UI de configurações/tweaks** — transparência, cores, seleção de borda de ativação.
-- **Volume por App** — sliders individuais para cada sink input (Spotify, Firefox, etc.).
-- **`.desktop` file** — resolver o warning do portal e permitir autostart.
+- **Sincronização dinâmica de cor de destaque do KDE Plasma** — *Adiado* (Control Center já possui toggle placeholder; sync automático com `kdeglobals` ficará para versão futura).
+- **Gravação in-app de atalho global** — *Adiado* (Wayland exige KGlobalAccel / GlobalShortcuts Portal; integração atual via Desktop Action + `kcmshell6 keys` atende o fluxo nativo).
+- **Empacotamento (`.kwinscript`, `Makefile`, `.rpm`)** — *Adiado*.
 
 ---
 

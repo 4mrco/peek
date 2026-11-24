@@ -14,9 +14,10 @@ echo "   Origem:  ${SCRIPT_DIR}"
 echo "   Destino: ${INSTALL_DIR}"
 
 # Copia os arquivos do script
-mkdir -p "${INSTALL_DIR}/contents/code"
+mkdir -p "${INSTALL_DIR}/contents/code" "${INSTALL_DIR}/contents/config"
 cp "${SCRIPT_DIR}/metadata.json"          "${INSTALL_DIR}/"
 cp "${SCRIPT_DIR}/contents/code/main.js"  "${INSTALL_DIR}/contents/code/"
+cp "${SCRIPT_DIR}/contents/config/main.xml" "${INSTALL_DIR}/contents/config/"
 
 # Ativa o plugin no kwinrc
 kwriteconfig6 --file kwinrc --group Plugins --key "${SCRIPT_ID}Enabled" true

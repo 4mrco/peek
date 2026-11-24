@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import ClassInfo, QObject, QTimer, Slot, Qt
+from PySide6.QtCore import ClassInfo, QObject, QPoint, QTimer, Slot, Qt
 
+from core.config import load_config
 from core.dbus_service import register_dbus_service
 
 if TYPE_CHECKING:
@@ -47,6 +48,8 @@ class Controller(QObject):
         self._art_downloader: ArtDownloader | None = None
         self._audio: AudioClient | None = None
         self._is_service_active: bool = True  # Estado do serviço (pode ser pausado via GUI)
+        self._menu_open: bool = False
+        self._config: dict = load_config()
 
         # Timer de auto-hide: ativado quando o mouse SAI da sidebar
         self._hide_timer = QTimer(self)
@@ -98,6 +101,7 @@ class Controller(QObject):
 
         self._sidebar = SidebarWindow(self._anchor)
         self._sidebar.hidden_fully.connect(self._anchor.hide)
+        self._apply_config_to_sidebar()
         self._mpris = MprisClient(self)
         self._art_downloader = ArtDownloader(self)
         self._audio = AudioClient(self)
@@ -112,9 +116,14 @@ class Controller(QObject):
         assert self._art_downloader is not None
         assert self._audio is not None
 
-        # Sidebar hide/show
+        # Sidebar hide/show & guarda de menus Wayland
         self._sidebar.mouse_entered.connect(self._on_mouse_entered)
         self._sidebar.mouse_left.connect(self._schedule_hide)
+        self._sidebar.menu_opened.connect(self._on_menu_opened)
+        self._sidebar.menu_closed.connect(self._on_menu_closed)
+        self._sidebar.output_menu_requested.connect(self._on_output_menu_requested)
+        self._sidebar.mic_menu_requested.connect(self._on_mic_menu_requested)
+        self._sidebar.player_menu_requested.connect(self._on_player_menu_requested)
 
         # MPRIS serviço → UI (Conectados! O fluxo está ativo)
         media = self._sidebar.media_player
@@ -138,6 +147,7 @@ class Controller(QObject):
         # Audio (Backend) → UI
         vol_slider = self._sidebar.volume_slider
         self._audio.master_volume_changed.connect(vol_slider.set_volume)
+        self._audio.master_mute_changed.connect(vol_slider.set_muted)
         self._audio.app_volumes_changed.connect(self._sidebar.update_app_sliders)
         self._audio.mic_mute_changed.connect(self._sidebar.on_mic_mute_changed)
 
@@ -145,8 +155,12 @@ class Controller(QObject):
         vol_slider.volume_changed.connect(self._audio.set_master_volume)
         self._sidebar.app_volume_changed.connect(self._on_app_volume_changed)
         self._sidebar.app_mute_toggled.connect(self._audio.toggle_stream_mute)
+        self._sidebar.master_mute_requested.connect(self._audio.toggle_master_mute)
         self._sidebar.mic_mute_requested.connect(self._audio.toggle_mic_mute)
         self._sidebar.output_cycle_requested.connect(self._audio.cycle_default_sink)
+        self._sidebar.sink_selected.connect(self._audio.set_default_sink)
+        self._sidebar.source_selected.connect(self._audio.set_default_source)
+        self._sidebar.player_selected.connect(self._mpris.select_player)
         
         # Força o MPRIS a popular a UI após todas as conexões terem sido feitas
         self._mpris.force_sync_ui()
@@ -167,6 +181,52 @@ class Controller(QObject):
             if stream_name.lower() in active_player.lower() or active_player.lower() in stream_name.lower():
                 self._mpris.set_volume(vol_percent / 100.0)
 
+    def _apply_config_to_sidebar(self) -> None:
+        if self._sidebar is None:
+            return
+        self._sidebar.set_trigger_edge(self._config["trigger_edge"])
+        self._sidebar.apply_appearance(
+            self._config["bg_color"],
+            self._config["primary_color"],
+            self._config["bg_opacity"],
+        )
+
+    def _on_output_menu_requested(self, global_pos: QPoint) -> None:
+        if self._sidebar is None or self._audio is None:
+            return
+        self._sidebar.show_output_menu(
+            self._audio.get_sinks(),
+            self._audio.is_master_muted(),
+            self._audio.is_mic_muted(),
+            global_pos,
+        )
+
+    def _on_mic_menu_requested(self, global_pos: QPoint) -> None:
+        if self._sidebar is None or self._audio is None:
+            return
+        self._sidebar.show_mic_menu(
+            self._audio.get_sources(),
+            self._audio.is_mic_muted(),
+            global_pos,
+        )
+
+    def _on_player_menu_requested(self, global_pos: QPoint) -> None:
+        if self._sidebar is None or self._mpris is None:
+            return
+        self._sidebar.show_player_menu(self._mpris.list_players(), global_pos)
+
+    def _on_menu_opened(self) -> None:
+        """Trava o auto-hide enquanto um QMenu de contexto estiver aberto no Wayland."""
+        self._menu_open = True
+        self._hide_timer.stop()
+        self._survival_timer.stop()
+
+    def _on_menu_closed(self) -> None:
+        """Libera a trava após fechar o QMenu e agenda hide se ainda visível."""
+        self._menu_open = False
+        if self._sidebar is not None and self._sidebar.is_visible:
+            self._hide_timer.start()
+
     def _on_mouse_entered(self) -> None:
         """Mouse entrou na sidebar: cancela hide timer E survival timer."""
         self._hide_timer.stop()
@@ -176,9 +236,13 @@ class Controller(QObject):
         self._hide_timer.stop()
 
     def _schedule_hide(self) -> None:
+        if self._menu_open:
+            return
         self._hide_timer.start()
 
     def _do_slide_out(self) -> None:
+        if self._menu_open:
+            return
         if self._sidebar is not None:
             self._sidebar.slide_out()
 
@@ -230,6 +294,23 @@ class Controller(QObject):
             self._survival_timer.stop()
             if self._sidebar is not None:
                 self._sidebar.slide_out()
+
+    @Slot()
+    def ReloadConfig(self) -> None:  # noqa: N802
+        """Recarrega config.json e reaplica aparência/borda na sidebar."""
+        self._config = load_config()
+        self._apply_config_to_sidebar()
+
+    @Slot(str, str, int)
+    def PreviewAppearance(self, bg_color: str, primary_color: str, bg_opacity: int) -> None:  # noqa: N802
+        """Aplica prévia em tempo real de aparência sem gravar em disco."""
+        if self._sidebar is not None:
+            self._sidebar.apply_appearance(bg_color, primary_color, bg_opacity)
+
+    @Slot(result=bool)
+    def IsServiceActive(self) -> bool:  # noqa: N802
+        """Retorna se a detecção de borda está ativa (usado pelo Control Center)."""
+        return self._is_service_active
 
     # ── Inicialização ────────────────────────────────────────────
 

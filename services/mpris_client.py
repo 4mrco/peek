@@ -71,6 +71,7 @@ class MprisClient(QObject):
         self._last_is_playing: bool = False
         self._last_track_id: str = ""  # ObjectPath MPRIS da faixa atual
         self._last_player_name: str = ""
+        self._preferred_service: str = ""
 
         # Timer de fallback para redescoberta (não para polling de estado)
         self._rediscover_timer = QTimer(self)
@@ -116,15 +117,28 @@ class MprisClient(QObject):
         best_service = None
         best_status = ""
 
-        for s in mpris_names:
-            status = self._read_busctl_property(s, MPRIS_PATH, MPRIS_PLAYER_IFACE, "PlaybackStatus")
-            if status == "Playing":
-                best_service = s
-                best_status = status
-                break
-            elif status == "Paused" and best_service is None:
-                best_service = s
-                best_status = status
+        if self._preferred_service:
+            if self._preferred_service in mpris_names:
+                best_service = self._preferred_service
+                best_status = (
+                    self._read_busctl_property(
+                        best_service, MPRIS_PATH, MPRIS_PLAYER_IFACE, "PlaybackStatus"
+                    )
+                    or ""
+                )
+            else:
+                self._preferred_service = ""
+
+        if best_service is None:
+            for s in mpris_names:
+                status = self._read_busctl_property(s, MPRIS_PATH, MPRIS_PLAYER_IFACE, "PlaybackStatus")
+                if status == "Playing":
+                    best_service = s
+                    best_status = status
+                    break
+                elif status == "Paused" and best_service is None:
+                    best_service = s
+                    best_status = status
 
         if best_service is None:
             best_service = mpris_names[0]
@@ -505,6 +519,42 @@ class MprisClient(QObject):
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             print(f"[PEEK:MPRIS] Erro ao sincronizar Volume no MPRIS: {e}")
+
+    def list_players(self) -> list[dict[str, object]]:
+        """Lista todos os players MPRIS ativos no D-Bus de sessão."""
+        names = self._list_bus_names()
+        mpris_names = [n for n in names if n.startswith(MPRIS_PREFIX)]
+        players: list[dict[str, object]] = []
+        for service in mpris_names:
+            identity = self._read_busctl_property(
+                service, MPRIS_PATH, "org.mpris.MediaPlayer2", "Identity"
+            )
+            if not identity:
+                identity = service.removeprefix(MPRIS_PREFIX).capitalize()
+            status = (
+                self._read_busctl_property(
+                    service, MPRIS_PATH, MPRIS_PLAYER_IFACE, "PlaybackStatus"
+                )
+                or "Stopped"
+            )
+            players.append({
+                "service": service,
+                "identity": identity,
+                "status": status,
+                "is_active": service == self._player_service,
+            })
+        return players
+
+    @Slot(str)
+    def select_player(self, service: str) -> None:
+        """Fixa e conecta imediatamente ao player MPRIS escolhido pelo usuário."""
+        if not service:
+            return
+        self._preferred_service = service
+        if service != self._player_service:
+            self._connect_to_player(service)
+        else:
+            self._refresh_state(force_emit=True)
 
     @property
     def active_player_name(self) -> str:

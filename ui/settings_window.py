@@ -13,14 +13,17 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
 from ui.components.clickable_icon import ClickableLabel
 from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, Qt, Signal, Slot, QTimer
+from PySide6.QtDBus import QDBusConnection, QDBusInterface
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QGridLayout,
     QLineEdit,
@@ -28,12 +31,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSlider,
     QTextEdit,
     QVBoxLayout,
     QWidget,
     QScrollArea,
 )
 
+from core.config import VALID_TRIGGER_EDGES, load_config, save_config
 from core.logger import LOG_PATH
 
 # ── Paleta Catppuccin Mocha ───────────────────────────────────────────────
@@ -304,11 +309,14 @@ class ControlCenter(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(None)
-        self._service_active: bool = True
         self._centered: bool = False  
-        
-        self._current_primary = _ACCENT_MAUVE
-        self._current_bg = _BG_BASE
+
+        self._config = load_config()
+        self._current_primary: str = self._config["primary_color"]
+        self._current_bg: str = self._config["bg_color"]
+        self._current_opacity: int = int(self._config["bg_opacity"])
+        self._current_edge: str = self._config["trigger_edge"]
+        self._service_active: bool = self._query_service_active()
         
         self._setup_window()
 
@@ -334,7 +342,7 @@ class ControlCenter(QWidget):
         self.setMinimumWidth(460)
         self.setMaximumWidth(560)
         self.setFixedHeight(650)
-        self.setStyleSheet(self._global_stylesheet())
+        self.setStyleSheet(self._global_stylesheet(self._current_primary, self._current_bg))
         # Qt.Window garante janela de topo raiz independente no Wayland.
         # WindowCloseButtonHint mantém o botão ✕ nativo.
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint)
@@ -433,7 +441,9 @@ class ControlCenter(QWidget):
         layout.addStretch()
 
         self._status_badge = QLabel("")
-        self._status_badge.setObjectName("ledStatusActive")
+        self._status_badge.setObjectName(
+            "ledStatusActive" if self._service_active else "ledStatusPaused"
+        )
         self._status_badge.setFixedSize(16, 16)
         layout.addWidget(self._status_badge, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -465,11 +475,38 @@ class ControlCenter(QWidget):
         row.addStretch()
 
         self._service_toggle = SlideSwitch()
-        self._service_toggle.setChecked(True)
+        self._service_toggle.setChecked(self._service_active)
         self._service_toggle.toggled.connect(self._on_service_toggled)
         row.addWidget(self._service_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
 
         layout.addLayout(row)
+
+        # Linha escolha de canto de ativação (somente cantos superiores)
+        edge_row = QHBoxLayout()
+        edge_desc_col = QVBoxLayout()
+
+        edge_name = QLabel("Canto de Ativação")
+        edge_name.setObjectName("settingName")
+        edge_desc_col.addWidget(edge_name)
+
+        edge_desc = QLabel("Define em qual canto superior o mouse invoca o painel")
+        edge_desc.setObjectName("settingDesc")
+        edge_desc_col.addWidget(edge_desc)
+
+        edge_row.addLayout(edge_desc_col)
+        edge_row.addStretch()
+
+        self._edge_combo = QComboBox()
+        self._edge_combo.setObjectName("edgeCombo")
+        self._edge_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._edge_combo.addItem("Canto Superior Direito", "TopRight")
+        self._edge_combo.addItem("Canto Superior Esquerdo", "TopLeft")
+        edge_idx = self._edge_combo.findData(self._current_edge)
+        self._edge_combo.setCurrentIndex(edge_idx if edge_idx >= 0 else 0)
+        self._edge_combo.currentIndexChanged.connect(self._on_trigger_edge_changed)
+        edge_row.addWidget(self._edge_combo, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        layout.addLayout(edge_row)
 
         return card
 
@@ -505,7 +542,7 @@ class ControlCenter(QWidget):
         layout.addLayout(row)
 
         # Dica de como usar
-        hint = QLabel("Clique para copiar o comando D-Bus e abrir as configurações do KDE.")
+        hint = QLabel("Cria a ação do PEEK no KDE e abre as Configurações de Atalhos do sistema.")
         hint.setObjectName("infoText")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -642,6 +679,36 @@ class ControlCenter(QWidget):
         bg_row.addWidget(self._btn_edit_bg, 0, Qt.AlignmentFlag.AlignVCenter)
         
         layout.addLayout(bg_row)
+
+        # ── Seção: Transparência do Painel ──
+        opacity_row = QHBoxLayout()
+        opacity_row.setSpacing(12)
+
+        opacity_name = QLabel("Transparência")
+        opacity_name.setObjectName("settingName")
+        opacity_row.addWidget(opacity_name)
+
+        opacity_row.addStretch()
+
+        self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self._opacity_slider.setObjectName("opacitySlider")
+        self._opacity_slider.setRange(30, 100)
+        self._opacity_slider.setValue(self._current_opacity)
+        self._opacity_slider.setFixedWidth(140)
+        self._opacity_slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._opacity_slider.valueChanged.connect(self._on_opacity_preview)
+        self._opacity_slider.sliderReleased.connect(self._on_opacity_committed)
+        opacity_row.addWidget(self._opacity_slider, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self._opacity_value_lbl = QLabel(f"{self._current_opacity}%")
+        self._opacity_value_lbl.setObjectName("opacityValue")
+        self._opacity_value_lbl.setFixedWidth(38)
+        self._opacity_value_lbl.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        opacity_row.addWidget(self._opacity_value_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        layout.addLayout(opacity_row)
         
         # Separador visual sutil
         sep = QFrame()
@@ -683,36 +750,136 @@ class ControlCenter(QWidget):
         dialog = ColorPickerDialog(current_color, self)
         
         from PySide6.QtWidgets import QApplication
-        original_css = QApplication.instance().styleSheet()
+        original_css = QApplication.instance().styleSheet() or self.styleSheet()
         if not original_css:
-            original_css = self._global_stylesheet()
+            original_css = self._global_stylesheet(self._current_primary, self._current_bg)
             
         dialog.color_previewed.connect(lambda hex_code: self._preview_theme(color_type, hex_code, dialog))
-        dialog.preview_canceled.connect(lambda: QApplication.instance().setStyleSheet(original_css))
+        dialog.preview_canceled.connect(lambda: self._cancel_theme_preview(original_css))
         dialog.color_applied.connect(lambda hex_code: self._apply_theme(color_type, hex_code, btn))
         
         dialog.exec()
 
+    def _cancel_theme_preview(self, original_css: str) -> None:
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance().setStyleSheet(original_css)
+        self.setStyleSheet(self._global_stylesheet(self._current_primary, self._current_bg))
+        self._call_daemon("ReloadConfig")
+
     def _preview_theme(self, color_type: str, hex_code: str, dialog: ColorPickerDialog) -> None:
         from PySide6.QtWidgets import QApplication
-        primary = hex_code if color_type == "primary" else _ACCENT_MAUVE
-        background = hex_code if color_type == "background" else _BG_BASE
+        primary = hex_code if color_type == "primary" else self._current_primary
+        background = hex_code if color_type == "background" else self._current_bg
         
         parsed_css = self._global_stylesheet(primary, background)
         QApplication.instance().setStyleSheet(parsed_css)
+        self.setStyleSheet(parsed_css)
+        self._call_daemon("PreviewAppearance", background, primary, self._current_opacity)
         
         if dialog.live_preview_cb.isChecked():
-            # Force sidebar visible for live preview
-            subprocess.run(["qdbus", "org.peek.App", "/App", "SlideIn"], capture_output=True, check=False)
+            self._call_daemon("SlideIn")
 
     def _apply_theme(self, color_type: str, hex_code: str, btn: QPushButton) -> None:
         if color_type == "primary":
             self._current_primary = hex_code
+            self._config = save_config({"primary_color": hex_code})
         else:
             self._current_bg = hex_code
-            
+            self._config = save_config({"bg_color": hex_code})
+
+        from PySide6.QtWidgets import QApplication
+        css = self._global_stylesheet(self._current_primary, self._current_bg)
+        QApplication.instance().setStyleSheet("")
+        self.setStyleSheet(css)
         btn.setStyleSheet(self._get_color_btn_css(hex_code))
-        print(f"New {color_type.capitalize()}: {hex_code}")
+        self._call_daemon("ReloadConfig")
+
+    @Slot(int)
+    def _on_opacity_preview(self, value: int) -> None:
+        self._current_opacity = value
+        self._opacity_value_lbl.setText(f"{value}%")
+        self._call_daemon(
+            "PreviewAppearance",
+            self._current_bg,
+            self._current_primary,
+            value,
+        )
+
+    @Slot()
+    def _on_opacity_committed(self) -> None:
+        value = int(self._opacity_slider.value())
+        self._current_opacity = value
+        self._opacity_value_lbl.setText(f"{value}%")
+        self._config = save_config({"bg_opacity": value})
+        self._call_daemon("ReloadConfig")
+
+    @Slot(int)
+    def _on_trigger_edge_changed(self, _index: int) -> None:
+        edge = self._edge_combo.currentData()
+        if not isinstance(edge, str) or edge not in VALID_TRIGGER_EDGES:
+            return
+        self._current_edge = edge
+        self._config = save_config({"trigger_edge": edge})
+        self._deploy_and_reload_kwin_edge(VALID_TRIGGER_EDGES[edge])
+        self._call_daemon("ReloadConfig")
+
+    def _deploy_and_reload_kwin_edge(self, edge_id: int) -> None:
+        """Atualiza o KWin Script instalado, grava TriggerEdge no kwinrc e recarrega o KWin."""
+        repo_script = Path(__file__).resolve().parent.parent / "kwin-script" / "kslide-edge-trigger"
+        install_dir = Path.home() / ".local" / "share" / "kwin" / "scripts" / "kslide-edge-trigger"
+        try:
+            (install_dir / "contents" / "code").mkdir(parents=True, exist_ok=True)
+            (install_dir / "contents" / "config").mkdir(parents=True, exist_ok=True)
+            for rel in ("metadata.json", "contents/code/main.js", "contents/config/main.xml"):
+                src = repo_script / rel
+                if src.exists():
+                    shutil.copy2(src, install_dir / rel)
+        except OSError as e:
+            print(f"[PEEK:GUI] Aviso ao copiar KWin script: {e}")
+
+        for cmd in (
+            ["kwriteconfig6", "--file", "kwinrc", "--group", "Script-kslide-edge-trigger", "--key", "TriggerEdge", str(edge_id)],
+            ["kwriteconfig6", "--file", "kwinrc", "--group", "Plugins", "--key", "kslide-edge-triggerEnabled", "false"],
+            ["qdbus6", "org.kde.KWin", "/KWin", "reconfigure"],
+            ["kwriteconfig6", "--file", "kwinrc", "--group", "Plugins", "--key", "kslide-edge-triggerEnabled", "true"],
+            ["qdbus6", "org.kde.KWin", "/KWin", "reconfigure"],
+        ):
+            try:
+                subprocess.run(cmd, capture_output=True, check=False, timeout=2)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+
+    def _query_service_active(self) -> bool:
+        """Consulta o estado real do serviço no daemon via D-Bus."""
+        try:
+            iface = QDBusInterface(
+                "org.peek.App",
+                "/App",
+                "org.peek.App",
+                QDBusConnection.sessionBus(),
+            )
+            if iface.isValid():
+                reply = iface.call("IsServiceActive")
+                args = reply.arguments()
+                if args:
+                    return bool(args[0])
+        except Exception:
+            pass
+        return True
+
+    def _call_daemon(self, method: str, *args: object) -> None:
+        """Envia comando D-Bus para o daemon sem travar se estiver offline."""
+        try:
+            iface = QDBusInterface(
+                "org.peek.App",
+                "/App",
+                "org.peek.App",
+                QDBusConnection.sessionBus(),
+            )
+            if iface.isValid():
+                iface.call(method, *args)
+        except Exception:
+            pass
         
     def _build_footer(self) -> QHBoxLayout:
         layout = QHBoxLayout()
@@ -1151,6 +1318,52 @@ class ControlCenter(QWidget):
                 background-color: rgba(166, 227, 161, 0.15);
                 color: {_ACCENT_GREEN};
                 border-color: rgba(166, 227, 161, 0.35);
+            }}
+
+            /* ── Combo & Slider de Opacidade ── */
+            #edgeCombo {{
+                background-color: {_BG_OVERLAY};
+                color: {_TEXT_MAIN};
+                border: 1px solid #45475a;
+                border-radius: {_RADIUS_SM};
+                padding: 6px 12px;
+                font-size: 12px;
+                min-width: 175px;
+            }}
+            #edgeCombo:hover {{
+                background-color: #45475a;
+            }}
+            #edgeCombo::drop-down {{
+                border: none;
+                width: 22px;
+            }}
+            #edgeCombo QAbstractItemView {{
+                background-color: {_BG_SURFACE};
+                color: {_TEXT_MAIN};
+                border: 1px solid {_BG_OVERLAY};
+                selection-background-color: {_BG_OVERLAY};
+                selection-color: {primary_color};
+            }}
+            #opacitySlider::groove:horizontal {{
+                background: {_BG_OVERLAY};
+                height: 6px;
+                border-radius: 3px;
+            }}
+            #opacitySlider::sub-page:horizontal {{
+                background: {primary_color};
+                border-radius: 3px;
+            }}
+            #opacitySlider::handle:horizontal {{
+                background: {_TEXT_MAIN};
+                width: 14px;
+                height: 14px;
+                margin: -4px 0;
+                border-radius: 7px;
+            }}
+            #opacityValue {{
+                color: {_TEXT_SUB};
+                font-size: 12px;
+                font-weight: bold;
             }}
 
             /* ── Footer ── */

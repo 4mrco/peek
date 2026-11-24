@@ -29,8 +29,8 @@ from PySide6.QtCore import (
     Signal,
     Slot
 )
-from PySide6.QtGui import QEnterEvent, QGuiApplication, QIcon
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QLayout, QVBoxLayout, QWidget, QFrame
+from PySide6.QtGui import QAction, QColor, QEnterEvent, QGuiApplication, QIcon
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLayout, QMenu, QVBoxLayout, QWidget, QFrame
 from typing import Any
 
 from ui.components.clickable_icon import ClickableIcon
@@ -44,14 +44,24 @@ class SidebarWindow(QWidget):
     mouse_entered      = Signal()
     mouse_left         = Signal()
     hidden_fully       = Signal()
+    menu_opened        = Signal()
+    menu_closed        = Signal()
     app_volume_changed = Signal(int, int)
     app_mute_toggled   = Signal(int)  # index do stream PulseAudio
+    master_mute_requested = Signal()  # toggle do volume master global
     mic_mute_requested = Signal()     # toggle do microfone global
     output_cycle_requested = Signal() # toggle de saída de áudio
+    output_menu_requested = Signal(QPoint)
+    mic_menu_requested    = Signal(QPoint)
+    player_menu_requested = Signal(QPoint)
+    sink_selected         = Signal(str)
+    source_selected       = Signal(str)
+    player_selected       = Signal(str)
 
     WIDTH: int = 360
     ANIMATION_DURATION_MS: int = 250
     LEFT_HOVER_MARGIN: int = 20
+    RIGHT_HOVER_MARGIN: int = 20
     TOP_OFFSET: int = 24
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -59,6 +69,11 @@ class SidebarWindow(QWidget):
         # a restrição de xdg_popup do Wayland quando usamos Qt.ToolTip.
         super().__init__(parent)
         self._is_visible: bool = False
+        self._trigger_edge: str = "TopRight"
+        self._bg_color: str = "#1e1e2e"
+        self._primary_color: str = "#cba6f7"
+        self._bg_opacity: int = 92
+        self._open_menus: int = 0
 
         # Ativa o rastreamento nativo do mouse (inclusive nos filhos principais)
         self.setMouseTracking(True)
@@ -118,15 +133,7 @@ class SidebarWindow(QWidget):
         # ── Card Principal Unificado (QFrame) ──
         self.main_card = QFrame()
         self.main_card.setObjectName("mainCard")
-        self.main_card.setStyleSheet(
-            """
-            #mainCard {
-                background-color: #1e1e2e;
-                border-top-left-radius: 16px;
-                border-bottom-left-radius: 16px;
-            }
-            """
-        )
+        self._apply_card_style()
         
         # O layout interno do card principal (contém Mixer na esq. e Player na dir.)
         card_layout = QHBoxLayout(self.main_card)
@@ -146,6 +153,8 @@ class SidebarWindow(QWidget):
         # Slider de volume master (sempre presente)
         self.volume_slider = VolumeSlider()
         self.volume_slider.setMouseTracking(True)
+        self.volume_slider.master_mute_toggled.connect(self.master_mute_requested.emit)
+        self.volume_slider.context_menu_requested.connect(self.output_menu_requested.emit)
         self._mixer_layout.addWidget(
             self.volume_slider,
             0,
@@ -161,6 +170,7 @@ class SidebarWindow(QWidget):
         # ── Card de controle de mídia (Direita) ──
         self.media_player = MediaPlayerWidget()
         self.media_player.setMouseTracking(True)
+        self.media_player.player_menu_requested.connect(self.player_menu_requested.emit)
         card_layout.addWidget(self.media_player, 1, Qt.AlignmentFlag.AlignTop)
 
         # Adiciona o card principal na janela
@@ -190,7 +200,9 @@ class SidebarWindow(QWidget):
         self._mic_icon.setToolTip("")  # O KDE as vezes injeta o nome do ícone, forçamos vazio
         self._mic_icon.leftClicked.connect(self._on_mic_left_click)
         self._mic_icon.rightClicked.connect(
-            lambda: print("Global: Abrir Menu do Mic")
+            lambda: self.mic_menu_requested.emit(
+                self._mic_icon.mapToGlobal(QPoint(0, self._mic_icon.height() + 4))
+            )
         )
 
         # ── Saída de Áudio (Speaker) ──
@@ -206,7 +218,9 @@ class SidebarWindow(QWidget):
         self._speaker_icon.setToolTip("")  # Extermínio de tooltip
         self._speaker_icon.leftClicked.connect(self.output_cycle_requested.emit)
         self._speaker_icon.rightClicked.connect(
-            lambda: print("Global: Abrir Menu de Saída")
+            lambda: self.output_menu_requested.emit(
+                self._speaker_icon.mapToGlobal(QPoint(0, self._speaker_icon.height() + 4))
+            )
         )
 
         row.addWidget(self._mic_icon,     0, Qt.AlignmentFlag.AlignBottom)
@@ -239,6 +253,92 @@ class SidebarWindow(QWidget):
         assert screen is not None, "Nenhum monitor detectado"
         return screen.availableGeometry()
 
+    def set_trigger_edge(self, edge: str) -> None:
+        """Alterna ancoragem e espelhamento de borda entre TopRight e TopLeft."""
+        normalized = "TopLeft" if edge == "TopLeft" else "TopRight"
+        self._trigger_edge = normalized
+        if self.layout():
+            if normalized == "TopLeft":
+                self.layout().setContentsMargins(0, 0, self.RIGHT_HOVER_MARGIN, 0)
+            else:
+                self.layout().setContentsMargins(self.LEFT_HOVER_MARGIN, 0, 0, 0)
+        self._apply_card_style()
+        self._sync_layout_geometry()
+        if self._is_visible:
+            self._reanchor_edge()
+
+    def apply_appearance(self, bg_color: str, primary_color: str, bg_opacity: int) -> None:
+        """Aplica cor de fundo, cor principal, transparência e Magic Gradient."""
+        if QColor(bg_color).isValid():
+            self._bg_color = bg_color
+        if QColor(primary_color).isValid():
+            self._primary_color = primary_color
+        self._bg_opacity = max(30, min(100, int(bg_opacity)))
+
+        self._apply_card_style()
+        if hasattr(self, "media_player"):
+            self.media_player.apply_accent_color(self._primary_color)
+        if hasattr(self, "volume_slider"):
+            self.volume_slider.apply_accent_color(self._primary_color)
+        for slider in self._app_sliders.values():
+            slider.apply_accent_color(self._primary_color)
+
+    def _apply_card_style(self) -> None:
+        """Gera QSS do main_card com Magic Gradient RGBA e bordas espelhadas."""
+        base = QColor(self._bg_color)
+        if not base.isValid():
+            base = QColor("#1e1e2e")
+        accent = QColor(self._primary_color)
+        if not accent.isValid():
+            accent = QColor("#cba6f7")
+
+        # Mistura sutil da cor de destaque no topo (6%) para dar profundidade estilo Breeze/Qt6
+        top_lifted = base.lighter(118)
+        top_r = round(top_lifted.red() * 0.94 + accent.red() * 0.06)
+        top_g = round(top_lifted.green() * 0.94 + accent.green() * 0.06)
+        top_b = round(top_lifted.blue() * 0.94 + accent.blue() * 0.06)
+        bottom = base.darker(115)
+
+        alpha = round(self._bg_opacity / 100.0, 3)
+        alpha_bottom = round(min(1.0, alpha + 0.04), 3)
+
+        stop_top = f"rgba({top_r}, {top_g}, {top_b}, {alpha})"
+        stop_mid = f"rgba({base.red()}, {base.green()}, {base.blue()}, {alpha})"
+        stop_bot = f"rgba({bottom.red()}, {bottom.green()}, {bottom.blue()}, {alpha_bottom})"
+
+        if self._trigger_edge == "TopLeft":
+            radius_css = (
+                "border-top-left-radius: 0px;\n"
+                "border-bottom-left-radius: 0px;\n"
+                "border-top-right-radius: 16px;\n"
+                "border-bottom-right-radius: 16px;\n"
+                "border: 1px solid rgba(255, 255, 255, 0.08);\n"
+                "border-left: none;"
+            )
+        else:
+            radius_css = (
+                "border-top-left-radius: 16px;\n"
+                "border-bottom-left-radius: 16px;\n"
+                "border-top-right-radius: 0px;\n"
+                "border-bottom-right-radius: 0px;\n"
+                "border: 1px solid rgba(255, 255, 255, 0.08);\n"
+                "border-right: none;"
+            )
+
+        self.main_card.setStyleSheet(
+            f"""
+            #mainCard {{
+                background-color: qlineargradient(
+                    x1:0, y1:0, x2:0.25, y2:1,
+                    stop:0 {stop_top},
+                    stop:0.55 {stop_mid},
+                    stop:1 {stop_bot}
+                );
+                {radius_css}
+            }}
+            """
+        )
+
     def _sync_layout_geometry(self) -> None:
         """Força recálculo síncrono do layout e sizeHint mesmo com a janela oculta."""
         if (self.layout() and
@@ -251,20 +351,23 @@ class SidebarWindow(QWidget):
         if self.layout():
             self.layout().activate()
 
-    def _reanchor_right(self) -> None:
-        """Mantém a borda direita colada na margem da tela preservando Y."""
+    def _reanchor_edge(self) -> None:
+        """Mantém a borda ativa (TopRight ou TopLeft) colada na margem da tela."""
         geo = self._screen_geometry()
         parent_pos = self.parentWidget().pos() if self.parentWidget() else QPoint(0, 0)
-        new_x = geo.x() + geo.width() - self.width() - parent_pos.x()
+        if self._trigger_edge == "TopLeft":
+            new_x = geo.x() - parent_pos.x()
+        else:
+            new_x = geo.x() + geo.width() - self.width() - parent_pos.x()
         if self.x() != new_x:
             self.move(new_x, self.y())
 
-    def _offscreen_rect(self) -> QRect:
-        """Retângulo posicionado fora da tela (à direita).
+    def _reanchor_right(self) -> None:
+        """Alias legado mantido para compatibilidade."""
+        self._reanchor_edge()
 
-        SetFixedSize trava a janela ao tamanho exato do layout, impedindo
-        o "gap transparente" que causava leaveEvent falso na borda direita.
-        """
+    def _offscreen_rect(self) -> QRect:
+        """Retângulo posicionado fora da tela conforme a borda ativa."""
         if (self.layout() and
                 self.layout().sizeConstraint() != QLayout.SizeConstraint.SetFixedSize):
             self.layout().setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
@@ -272,18 +375,18 @@ class SidebarWindow(QWidget):
         w   = self.sizeHint().width()
         h   = self.sizeHint().height()
         parent_pos = self.parentWidget().pos() if self.parentWidget() else QPoint(0, 0)
+        if self._trigger_edge == "TopLeft":
+            x = geo.x() - w - parent_pos.x()
+        else:
+            x = geo.x() + geo.width() - parent_pos.x()
         return QRect(
-            geo.x() + geo.width() - parent_pos.x(),
+            x,
             geo.y() + self.TOP_OFFSET - parent_pos.y(),
             w, h,
         )
 
     def _onscreen_rect(self) -> QRect:
-        """Retângulo posicionado na borda direita da tela.
-
-        O crescimento dinâmico (novos sliders) expande para a esquerda,
-        mantendo a borda direita colada na margem da tela.
-        """
+        """Retângulo posicionado na borda ativa da tela (TopRight ou TopLeft)."""
         if (self.layout() and
                 self.layout().sizeConstraint() != QLayout.SizeConstraint.SetFixedSize):
             self.layout().setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
@@ -291,8 +394,12 @@ class SidebarWindow(QWidget):
         w   = self.sizeHint().width()
         h   = self.sizeHint().height()
         parent_pos = self.parentWidget().pos() if self.parentWidget() else QPoint(0, 0)
+        if self._trigger_edge == "TopLeft":
+            x = geo.x() - parent_pos.x()
+        else:
+            x = geo.x() + geo.width() - w - parent_pos.x()
         return QRect(
-            geo.x() + geo.width() - w - parent_pos.x(),
+            x,
             geo.y() + self.TOP_OFFSET - parent_pos.y(),
             w, h,
         )
@@ -374,6 +481,7 @@ class SidebarWindow(QWidget):
                 slider.set_muted(mute)
                 slider.setMouseTracking(True)
                 slider.set_stream_index(idx)
+                slider.apply_accent_color(self._primary_color)
                 
                 # Usando default argument (idx=idx) para capturar o valor no loop
                 slider.volume_changed.connect(lambda v, idx=idx: self.app_volume_changed.emit(idx, v))
@@ -392,7 +500,146 @@ class SidebarWindow(QWidget):
             self.hide()
             self.hidden_fully.emit()
         else:
-            self._reanchor_right()
+            self._reanchor_edge()
+
+    # ── Menus de Contexto (Fase 3 — Subtle Menus) ────────────────────
+
+    def _build_context_menu(self) -> QMenu:
+        """Cria QMenu nativo estilizado e não-bloqueante com guarda de auto-hide."""
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        menu.setStyleSheet(
+            f"""
+            QMenu {{
+                background-color: #181825;
+                color: #cdd6f4;
+                border: 1px solid #313244;
+                border-radius: 10px;
+                padding: 6px;
+                font-size: 12px;
+            }}
+            QMenu::item {{
+                padding: 6px 14px;
+                border-radius: 6px;
+            }}
+            QMenu::item:selected {{
+                background-color: #313244;
+                color: {self._primary_color};
+            }}
+            QMenu::item:disabled {{
+                color: #6c7086;
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: #313244;
+                margin: 4px 8px;
+            }}
+            """
+        )
+        return menu
+
+    def _popup_menu(self, menu: QMenu, global_pos: QPoint) -> None:
+        menu.aboutToShow.connect(self._on_menu_about_to_show)
+        menu.aboutToHide.connect(self._on_menu_about_to_hide)
+        menu.popup(global_pos)
+
+    def _on_menu_about_to_show(self) -> None:
+        self._open_menus += 1
+        self.menu_opened.emit()
+
+    def _on_menu_about_to_hide(self) -> None:
+        self._open_menus = max(0, self._open_menus - 1)
+        if self._open_menus == 0:
+            self.menu_closed.emit()
+
+    def show_output_menu(
+        self,
+        sinks: list[dict[str, Any]],
+        master_muted: bool,
+        mic_muted: bool,
+        global_pos: QPoint,
+    ) -> None:
+        """Abre menu de contexto com seleção direta de saída de áudio e mutes."""
+        menu = self._build_context_menu()
+        header = menu.addAction("Saída de Áudio")
+        header.setEnabled(False)
+        menu.addSeparator()
+
+        if sinks:
+            for sink in sinks:
+                desc = str(sink.get("description") or sink.get("name") or "Desconhecido")
+                name = str(sink.get("name") or "")
+                action = QAction(desc, menu)
+                action.setCheckable(True)
+                action.setChecked(bool(sink.get("is_default")))
+                action.triggered.connect(lambda _chk=False, n=name: self.sink_selected.emit(n))
+                menu.addAction(action)
+        else:
+            empty = menu.addAction("Nenhuma saída detectada")
+            empty.setEnabled(False)
+
+        menu.addSeparator()
+        act_mute_out = menu.addAction("Desmutar Saída Master" if master_muted else "Mutar Saída Master")
+        act_mute_out.triggered.connect(self.master_mute_requested.emit)
+        act_mute_mic = menu.addAction("Desmutar Microfone" if mic_muted else "Mutar Microfone")
+        act_mute_mic.triggered.connect(self.mic_mute_requested.emit)
+
+        self._popup_menu(menu, global_pos)
+
+    def show_mic_menu(
+        self,
+        sources: list[dict[str, Any]],
+        mic_muted: bool,
+        global_pos: QPoint,
+    ) -> None:
+        """Abre menu de contexto com seleção direta de entrada (microfone)."""
+        menu = self._build_context_menu()
+        header = menu.addAction("Entrada (Microfone)")
+        header.setEnabled(False)
+        menu.addSeparator()
+
+        if sources:
+            for src in sources:
+                desc = str(src.get("description") or src.get("name") or "Desconhecido")
+                name = str(src.get("name") or "")
+                action = QAction(desc, menu)
+                action.setCheckable(True)
+                action.setChecked(bool(src.get("is_default")))
+                action.triggered.connect(lambda _chk=False, n=name: self.source_selected.emit(n))
+                menu.addAction(action)
+        else:
+            empty = menu.addAction("Nenhum microfone detectado")
+            empty.setEnabled(False)
+
+        menu.addSeparator()
+        act_mute_mic = menu.addAction("Desmutar Microfone" if mic_muted else "Mutar Microfone")
+        act_mute_mic.triggered.connect(self.mic_mute_requested.emit)
+
+        self._popup_menu(menu, global_pos)
+
+    def show_player_menu(self, players: list[dict[str, Any]], global_pos: QPoint) -> None:
+        """Abre menu de contexto com seleção direta do player MPRIS ativo."""
+        menu = self._build_context_menu()
+        header = menu.addAction("Players MPRIS")
+        header.setEnabled(False)
+        menu.addSeparator()
+
+        if players:
+            for p in players:
+                identity = str(p.get("identity") or "Player")
+                status = str(p.get("status") or "")
+                service = str(p.get("service") or "")
+                suffix = " (▶)" if status == "Playing" else " (⏸)" if status == "Paused" else ""
+                action = QAction(f"{identity}{suffix}", menu)
+                action.setCheckable(True)
+                action.setChecked(bool(p.get("is_active")))
+                action.triggered.connect(lambda _chk=False, s=service: self.player_selected.emit(s))
+                menu.addAction(action)
+        else:
+            empty = menu.addAction("Nenhum player ativo")
+            empty.setEnabled(False)
+
+        self._popup_menu(menu, global_pos)
 
     @Slot(bool)
     def on_mic_mute_changed(self, muted: bool) -> None:
@@ -437,13 +684,14 @@ class SidebarWindow(QWidget):
             return
         if hasattr(self, '_animation') and self._animation.state() == self._animation.State.Running:
             return
-        self._reanchor_right()
+        self._reanchor_edge()
 
     def enterEvent(self, event: QEnterEvent) -> None:  # noqa: N802
         self.mouse_entered.emit()
         super().enterEvent(event)
 
     def leaveEvent(self, event: QEvent) -> None:  # noqa: N802
-        self.mouse_left.emit()
+        if self._open_menus == 0:
+            self.mouse_left.emit()
         super().leaveEvent(event)
 

@@ -57,6 +57,8 @@ class _AudioWorker(QObject):
         self._last_master_mute: bool | None    = None
         self._last_apps:        list[dict[str, Any]] = []
         self._last_mic_mute:    bool | None    = None
+        self._sinks_cache:      list[dict[str, Any]] = []
+        self._sources_cache:    list[dict[str, Any]] = []
 
     @Slot()
     def start(self) -> None:
@@ -110,6 +112,14 @@ class _AudioWorker(QObject):
         default_name = server_info.default_sink_name
 
         sinks = self._pulse.sink_list()
+        self._sinks_cache = [
+            {
+                "name": s.name,
+                "description": s.description or s.name,
+                "is_default": s.name == default_name,
+            }
+            for s in sinks
+        ]
         default_sink = None
         for s in sinks:
             if s.name == default_name:
@@ -165,7 +175,18 @@ class _AudioWorker(QObject):
         try:
             server_info = self._pulse.server_info()
             default_src = server_info.default_source_name
-            for src in self._pulse.source_list():
+            sources = self._pulse.source_list()
+            self._sources_cache = [
+                {
+                    "name": src.name,
+                    "description": src.description or src.name,
+                    "is_default": src.name == default_src,
+                }
+                for src in sources
+                if getattr(src, "monitor_of_sink_name", None) is None
+                and not src.name.endswith(".monitor")
+            ]
+            for src in sources:
                 if src.name == default_src:
                     muted = bool(src.mute)
                     if muted != self._last_mic_mute:
@@ -291,6 +312,56 @@ class _AudioWorker(QObject):
         except Exception as e:
             print(f"[PEEK:Audio] Erro ao alternar a saída de áudio: {e}")
 
+    def get_sinks(self) -> list[dict[str, Any]]:
+        """Retorna cópia rasa da lista cacheada de saídas (sinks)."""
+        return [dict(item) for item in self._sinks_cache]
+
+    def get_sources(self) -> list[dict[str, Any]]:
+        """Retorna cópia rasa da lista cacheada de entradas (sources sem monitors)."""
+        return [dict(item) for item in self._sources_cache]
+
+    def is_master_muted(self) -> bool:
+        return bool(self._last_master_mute)
+
+    def is_mic_muted(self) -> bool:
+        return bool(self._last_mic_mute)
+
+    @Slot(str)
+    def set_default_sink(self, sink_name: str) -> None:
+        """Define um sink específico como padrão e move os streams ativos para ele."""
+        try:
+            with pulsectl.Pulse("peek-route-writer") as p:
+                target = next((s for s in p.sink_list() if s.name == sink_name), None)
+                if target is None:
+                    return
+                p.default_set(target)
+                for si in p.sink_input_list():
+                    try:
+                        p.sink_input_move(si.index, target.index)
+                    except Exception as e:
+                        print(f"[PEEK:Audio] Erro ao mover stream {si.index}: {e}")
+                print(f"[PEEK:Audio] Saída selecionada: {target.description}")
+        except Exception as e:
+            print(f"[PEEK:Audio] Erro ao selecionar saída '{sink_name}': {e}")
+
+    @Slot(str)
+    def set_default_source(self, source_name: str) -> None:
+        """Define uma source específica como padrão e move source outputs ativos."""
+        try:
+            with pulsectl.Pulse("peek-route-writer") as p:
+                target = next((s for s in p.source_list() if s.name == source_name), None)
+                if target is None:
+                    return
+                p.default_set(target)
+                for so in p.source_output_list():
+                    try:
+                        p.source_output_move(so.index, target.index)
+                    except Exception as e:
+                        print(f"[PEEK:Audio] Erro ao mover entrada {so.index}: {e}")
+                print(f"[PEEK:Audio] Microfone selecionado: {target.description}")
+        except Exception as e:
+            print(f"[PEEK:Audio] Erro ao selecionar entrada '{source_name}': {e}")
+
 
 class AudioClient(QObject):
     """Proxy thread-safe para o worker de áudio.
@@ -362,6 +433,30 @@ class AudioClient(QObject):
     def cycle_default_sink(self) -> None:
         """Avança para a próxima saída de áudio e move os streams. Thread-safe."""
         self._worker.cycle_default_sink()
+
+    @Slot(str)
+    def set_default_sink(self, sink_name: str) -> None:
+        """Seleciona a saída de áudio padrão pelo nome. Thread-safe."""
+        self._worker.set_default_sink(sink_name)
+
+    @Slot(str)
+    def set_default_source(self, source_name: str) -> None:
+        """Seleciona a entrada de áudio (mic) padrão pelo nome. Thread-safe."""
+        self._worker.set_default_source(source_name)
+
+    def get_sinks(self) -> list[dict[str, Any]]:
+        """Retorna os sinks cacheados pelo worker."""
+        return self._worker.get_sinks()
+
+    def get_sources(self) -> list[dict[str, Any]]:
+        """Retorna as sources (sem monitors) cacheadas pelo worker."""
+        return self._worker.get_sources()
+
+    def is_master_muted(self) -> bool:
+        return self._worker.is_master_muted()
+
+    def is_mic_muted(self) -> bool:
+        return self._worker.is_mic_muted()
 
     def stop(self) -> None:
         """Para a thread de áudio graciosamente."""

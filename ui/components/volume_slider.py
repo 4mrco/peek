@@ -12,12 +12,13 @@ from __future__ import annotations
 
 from PySide6.QtCore import (
     QEasingCurve,
+    QPoint,
     QPropertyAnimation,
     Qt,
     Property,
     Signal,
 )
-from PySide6.QtGui import QEnterEvent, QPaintEvent, QPainter, QColor, QFont, QIcon, QMouseEvent
+from PySide6.QtGui import QContextMenuEvent, QEnterEvent, QPaintEvent, QPainter, QColor, QFont, QIcon, QMouseEvent
 from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QLabel,
@@ -58,6 +59,7 @@ class _ThinSlider(QSlider):
 
         # Largura animável do groove
         self._groove_width: int = THIN_WIDTH
+        self._fill_color: str = "#cba6f7"
         self._setup_animation()
         self._apply_style()
 
@@ -142,6 +144,11 @@ class _ThinSlider(QSlider):
         self.setValue(value)
         self.blockSignals(False)
 
+    def set_accent_color(self, color: str) -> None:
+        """Atualiza a cor de destaque do preenchimento do slider."""
+        self._fill_color = color
+        self._apply_style()
+
     # ── Estilo dinâmico ──────────────────────────────────────────────
 
     def _apply_style(self) -> None:
@@ -152,7 +159,7 @@ class _ThinSlider(QSlider):
 
         # Cores Catppuccin Mocha
         groove_bg = "#313244"       # Base escura
-        fill_color = "#cba6f7"      # Mauve (cor de destaque do PEEK)
+        fill_color = self._fill_color
         handle_color = "#cdd6f4"    # Text claro
 
         self.setStyleSheet(f"""
@@ -190,6 +197,8 @@ class VolumeSlider(QWidget):
     
     volume_changed = Signal(int)
     mute_toggled   = Signal(int)  # Emite o index do stream PulseAudio
+    master_mute_toggled = Signal()
+    context_menu_requested = Signal(QPoint)
     
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -239,6 +248,14 @@ class VolumeSlider(QWidget):
         """Registra o index do sink input PulseAudio para mute toggle."""
         self._stream_index = index
 
+    def apply_accent_color(self, primary_color: str) -> None:
+        """Atualiza a cor de destaque do slider."""
+        self._slider.set_accent_color(primary_color)
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:  # noqa: N802
+        self.context_menu_requested.emit(event.globalPos())
+        event.accept()
+
     def set_muted(self, muted: bool) -> None:
         """Atualiza o feedback visual de mute via opacidade.
 
@@ -254,13 +271,12 @@ class VolumeSlider(QWidget):
         self.repaint()
 
     def _on_icon_left_click(self) -> None:
-        """Emite mute_toggled com o index do stream (substitui print placeholder)."""
+        """Emite mute_toggled (app) ou master_mute_toggled (master)."""
+        effect = self.graphicsEffect()
+        current_is_muted = isinstance(effect, QGraphicsOpacityEffect) and effect.opacity() < 0.5
+        self.set_muted(not current_is_muted)
+
         if self._stream_index >= 0:
-            # Otimismo visual imediato (sem delay do polling do PulseAudio)
-            effect = self.graphicsEffect()
-            if isinstance(effect, QGraphicsOpacityEffect):
-                # Se está 1.0 (não mutado), fingimos que mutou. Se está 0.4, fingimos que desmutou.
-                current_is_muted = effect.opacity() < 0.5
-                self.set_muted(not current_is_muted)
-                
             self.mute_toggled.emit(self._stream_index)
+        else:
+            self.master_mute_toggled.emit()
