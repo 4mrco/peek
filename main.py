@@ -15,7 +15,6 @@ from PySide6.QtWidgets import QApplication
 
 from core.controller import Controller
 from core.dbus_service import DBUS_SERVICE
-from ui.settings_window import ControlCenter
 
 
 def _is_service_registered(service_name: str) -> bool:
@@ -64,6 +63,8 @@ def main() -> int:
         
         # A janela vai se centralizar, desconectar o parentesco transiente
         # nativamente e exibir. Não precisa do Controller.
+        from ui.settings_window import ControlCenter
+
         gui = ControlCenter()
         gui.show()
         

@@ -4,15 +4,21 @@ Registra-se no D-Bus (org.peek.App) e expõe toggle/slide_in/slide_out.
 O KWin Script dispara esses métodos quando o mouse encosta na borda.
 Gerencia o timer de auto-hide quando o mouse sai da sidebar."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from PySide6.QtCore import ClassInfo, QObject, QTimer, Slot, Qt
-from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QWidget
 
 from core.dbus_service import register_dbus_service
-from services.art_downloader import ArtDownloader
-from services.audio_client import AudioClient
-from services.mpris_client import MprisClient
-from ui.sidebar_window import SidebarWindow
+
+if TYPE_CHECKING:
+    from PySide6.QtWidgets import QWidget
+
+    from services.art_downloader import ArtDownloader
+    from services.audio_client import AudioClient
+    from services.mpris_client import MprisClient
+    from ui.sidebar_window import SidebarWindow
 
 
 @ClassInfo({"D-Bus Interface": "org.peek.App"})
@@ -26,11 +32,47 @@ class Controller(QObject):
     4. Mouse re-entra na sidebar antes do timeout → timer cancelado.
     """
 
-    HIDE_DELAY_MS: int = 400
+    HIDE_DELAY_MS: int = 350
     SURVIVAL_MS: int = 3_500  # Fecha sozinha se o mouse não entrar após abertura via D-Bus
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
+
+        # Lazy-init: UI e workers ficam em None no boot --daemon até o primeiro
+        # Toggle/SlideIn para minimizar consumo de RAM em idle.
+        self._initialized: bool = False
+        self._anchor: QWidget | None = None
+        self._sidebar: SidebarWindow | None = None
+        self._mpris: MprisClient | None = None
+        self._art_downloader: ArtDownloader | None = None
+        self._audio: AudioClient | None = None
+        self._is_service_active: bool = True  # Estado do serviço (pode ser pausado via GUI)
+
+        # Timer de auto-hide: ativado quando o mouse SAI da sidebar
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.setInterval(self.HIDE_DELAY_MS)
+        self._hide_timer.timeout.connect(self._do_slide_out)
+
+        # Survival timer: ativado quando a sidebar ABRE via D-Bus.
+        # Se o mouse não entrar na janela antes do timeout, ela fecha sozinha.
+        self._survival_timer = QTimer(self)
+        self._survival_timer.setSingleShot(True)
+        self._survival_timer.setInterval(self.SURVIVAL_MS)
+        self._survival_timer.timeout.connect(self._do_slide_out)
+
+    def _ensure_initialized(self) -> None:
+        """Instancia âncora, sidebar, workers e conecta sinais na primeira demanda."""
+        if self._initialized:
+            return
+
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtWidgets import QWidget
+
+        from services.art_downloader import ArtDownloader
+        from services.audio_client import AudioClient
+        from services.mpris_client import MprisClient
+        from ui.sidebar_window import SidebarWindow
 
         # Workaround para Qt.ToolTip no Wayland: A sidebar precisa de uma janela
         # raiz real (xdg-toplevel) para agir como âncora (transient parent),
@@ -49,8 +91,9 @@ class Controller(QObject):
 
         # Força a âncora a ter o tamanho exato da tela.
         # Assim, quando o KWin a centralizar, o (0,0) local será o (0,0) global.
-        screen_rect = QGuiApplication.primaryScreen().availableGeometry()
-        self._anchor.setGeometry(screen_rect)
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            self._anchor.setGeometry(screen.availableGeometry())
         self._anchor.hide()  # Inicia oculta no background (taskbar limpa)
 
         self._sidebar = SidebarWindow(self._anchor)
@@ -58,27 +101,20 @@ class Controller(QObject):
         self._mpris = MprisClient(self)
         self._art_downloader = ArtDownloader(self)
         self._audio = AudioClient(self)
-        self._is_service_active: bool = True  # Estado do serviço (pode ser pausado via GUI)
-
-        # Timer de auto-hide: ativado quando o mouse SAI da sidebar
-        self._hide_timer = QTimer(self)
-        self._hide_timer.setSingleShot(True)
-        self._hide_timer.setInterval(self.HIDE_DELAY_MS)
-
-        # Survival timer: ativado quando a sidebar ABRE via D-Bus.
-        # Se o mouse não entrar na janela antes do timeout, ela fecha sozinha.
-        self._survival_timer = QTimer(self)
-        self._survival_timer.setSingleShot(True)
-        self._survival_timer.setInterval(self.SURVIVAL_MS)
-        self._survival_timer.timeout.connect(self._do_slide_out)
 
         self._connect_signals()
+        self._initialized = True
+        print("[PEEK:Daemon] UI e workers inicializados sob demanda.")
 
     def _connect_signals(self) -> None:
+        assert self._sidebar is not None
+        assert self._mpris is not None
+        assert self._art_downloader is not None
+        assert self._audio is not None
+
         # Sidebar hide/show
         self._sidebar.mouse_entered.connect(self._on_mouse_entered)
         self._sidebar.mouse_left.connect(self._schedule_hide)
-        self._hide_timer.timeout.connect(self._do_slide_out)
 
         # MPRIS serviço → UI (Conectados! O fluxo está ativo)
         media = self._sidebar.media_player
@@ -119,6 +155,8 @@ class Controller(QObject):
 
     def _on_app_volume_changed(self, stream_index: int, vol_percent: int) -> None:
         """Sincroniza o volume do app no PulseAudio e, se for o player ativo, no MPRIS."""
+        if self._audio is None or self._mpris is None:
+            return
         self._audio.set_app_volume(stream_index, vol_percent)
         
         stream_name = self._audio.get_stream_name(stream_index)
@@ -141,7 +179,8 @@ class Controller(QObject):
         self._hide_timer.start()
 
     def _do_slide_out(self) -> None:
-        self._sidebar.slide_out()
+        if self._sidebar is not None:
+            self._sidebar.slide_out()
 
     # ── API pública — exposta diretamente no D-Bus ────────────────────
 
@@ -150,6 +189,8 @@ class Controller(QObject):
         """Alterna visibilidade da sidebar (bloqueado se serviço pausado)."""
         if not self._is_service_active:
             return
+        self._ensure_initialized()
+        assert self._sidebar is not None and self._anchor is not None
         if self._sidebar.is_visible:
             self._hide_timer.stop()
             self._survival_timer.stop()
@@ -164,6 +205,8 @@ class Controller(QObject):
         """Mostra a sidebar (bloqueado se serviço pausado)."""
         if not self._is_service_active:
             return
+        self._ensure_initialized()
+        assert self._sidebar is not None and self._anchor is not None
         self._hide_timer.stop()
         self._anchor.show()  # Mostra a âncora antes da animação
         self._sidebar.slide_in()
@@ -174,7 +217,8 @@ class Controller(QObject):
         """Esconde a sidebar (idempotente)."""
         self._hide_timer.stop()
         self._survival_timer.stop()
-        self._sidebar.slide_out()
+        if self._sidebar is not None:
+            self._sidebar.slide_out()
 
     @Slot(bool)
     def SetServiceActive(self, active: bool) -> None:  # noqa: N802
@@ -184,7 +228,8 @@ class Controller(QObject):
             # Fecha a sidebar imediatamente ao pausar
             self._hide_timer.stop()
             self._survival_timer.stop()
-            self._sidebar.slide_out()
+            if self._sidebar is not None:
+                self._sidebar.slide_out()
 
     # ── Inicialização ────────────────────────────────────────────
 

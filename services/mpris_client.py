@@ -53,8 +53,8 @@ class MprisClient(QObject):
     playback_state_changed = Signal(bool)
     art_url_changed = Signal(str)
     player_name_changed = Signal(str)
-    position_changed = Signal(int)
-    duration_changed = Signal(int)
+    position_changed = Signal("qlonglong")
+    duration_changed = Signal("qlonglong")
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)

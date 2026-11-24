@@ -1,6 +1,6 @@
 # PROJECT_STATE.md — PEEK
 
-> **Última atualização:** 2026-08-08 — Task #14 (Rebranding KSlide → PEEK)  
+> **Última atualização:** 2026-11-24 — Task #34 (UX/UI Bugfixes: Hidden Layout Sync, Int64 Seek, Left Hover Margin & Native Click-Through)  
 > **Regra:** Este arquivo DEVE ser atualizado ao final de cada funcionalidade grande.
 
 ---
@@ -12,7 +12,7 @@ Companheiro invisível: você só olha para ele (PEEK) quando precisa. Sem bloat
 
 **Funcionalidades do MVP:**
 - Controle de mídia (MPRIS/Spotify) — ✅ Completo
-- Controle de volume (Master + por App via PipeWire/PulseAudio) — 🔧 Em progresso
+- Controle de volume (Master + por App via PipeWire/PulseAudio) — ✅ Completo
 
 ---
 
@@ -249,16 +249,33 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 - `requirements.txt`: Isolando `PySide6` e `pulsectl`.
 - `README.md`: Definindo os escopos experimentais (Wayland/KDE), filosofia "Zero Bloat" e "Progressive Disclosure", além de um panorama claro da Tech Stack (Python, Qt6, D-Bus, Multithreading de Áudio) e instruções de execução local.
 
+### 12. Lazy Initialization do Daemon (Task #33)
+
+**Problema:** No boot com `--daemon`, o `Controller` instanciava imediatamente a `SidebarWindow`, a janela âncora (`_anchor`), o `MprisClient` (com timer de redescoberta de 2s), o `ArtDownloader` (`QNetworkAccessManager`) e o `AudioClient` (com `QThread` dedicada + conexão `pulsectl` fazendo polling a cada 500ms), consumindo RAM e ciclos de CPU antes mesmo da primeira abertura.
+
+**Solução:**
+- **`Controller.__init__` minimalista:** No boot (`--daemon`), apenas `QApplication`, `QDBusConnection` (`org.peek.App`), `_hide_timer` e `_survival_timer` são criados; `_anchor`, `_sidebar`, `_mpris`, `_art_downloader` e `_audio` iniciam como `None` (com imports também postergados para `_ensure_initialized()`, e `ControlCenter` importado apenas no processo GUI em `main.py`).
+- **Inicialização sob demanda (`_ensure_initialized()`):** Executada uma única vez na primeira chamada ativa de `Toggle()` ou `SlideIn()`. Constrói `_anchor` e `SidebarWindow`, inicia `MprisClient`, `ArtDownloader` e `AudioClient` (e sua `QThread`), conecta todos os sinais via `_connect_signals()` e executa `force_sync_ui()` antes de exibir o painel.
+- **Persistência após primeira abertura:** Após inicializados, a sidebar e os workers permanecem vivos em memória nos `slide_out()` subsequentes (sem destruir/recriar widgets ou threads).
+- **Segurança pré-inicialização:** `SlideOut()`, `SetServiceActive(False)` e `_do_slide_out()` validam `self._sidebar is not None` para evitar `AttributeError` e evitar inicializar a UI sem necessidade antes do primeiro `Toggle`.
+
+### 13. UX/UI Bugfixes: Hidden Layout Sync, Int64 Seek, Left Hover Margin & Native Click-Through (Task #34)
+
+- **Sincronização de Layout Oculto (Right-Anchor Fix):** Quando sliders dinâmicos de app são removidos enquanto `SidebarWindow` está oculta, Qt suprime a propagação de `updateGeometry()` e mantém `sizeHint()`/`SetFixedSize` presos à largura antiga. `update_app_sliders()` agora oculta e desanexa (`hide()`, `setParent(None)`) sliders removidos e chama `_sync_layout_geometry()` (`updateGeometry()` + `layout().activate()` no `main_card` e na janela), também executado no início de `slide_in()`, além de `_reanchor_right()` ao fim da animação para capturar mudanças ocorridas durante o slide.
+- **Seek Bar Int64 & Formatação Longa:** `MprisClient.position_changed` e `duration_changed` (além dos slots `MediaPlayerWidget.update_position` e `update_duration`) migraram de `int` (32-bit, overflow em `2,147,483,647 µs` ≈ 35m 47s) para `"qlonglong"` (64-bit). `_format_time()` ganhou clamp `max(0, seconds)` e suporte a `H:MM:SS` para mídias >= 1h.
+- **Margem de Tolerância Esquerda (`LEFT_HOVER_MARGIN = 20`):** Adicionados 20px transparentes à esquerda de `main_card` via `main_layout.setContentsMargins(20, 0, 0, 0)` (mantendo margem direita 0px) para evitar `leaveEvent` imediato em pequenos desvios do cursor sem deslocar `main_card` da borda direita. `HIDE_DELAY_MS` ajustado para `350ms`.
+- **Click-Through Nativo Acima/Abaixo (`TOP_OFFSET = 24`):** Em vez de `setMask()` (frágil para input region e recálculo dinâmico de sliders no KDE Plasma 6 Wayland), as margens superior/inferior do `main_layout` foram zeradas e `_offscreen_rect()`/`_onscreen_rect()` deslocam `y` por `TOP_OFFSET = 24`. Assim a `wl_surface` tem exatamente a altura do `main_card`, deixando as áreas acima e abaixo 100% click-through nativamente.
+
 ---
 
 ## Componentes e Sinais
 
 | Componente | Sinais Emitidos | Slots Expostos |
 |---|---|---|
-| `MprisClient` | `track_changed(str,str)`, `playback_state_changed(bool)`, `art_url_changed(str)`, `player_name_changed(str)`, `position_changed(int)`, `duration_changed(int)` | `play_pause()`, `next_track()`, `previous_track()` |
+| `MprisClient` | `track_changed(str,str)`, `playback_state_changed(bool)`, `art_url_changed(str)`, `player_name_changed(str)`, `position_changed(qlonglong)`, `duration_changed(qlonglong)` | `play_pause()`, `next_track()`, `previous_track()` |
 | `ArtDownloader` | `art_ready(QPixmap)`, `art_cleared()` | `fetch(str)` |
 | `AudioClient` | `master_volume_changed(int)`, `master_mute_changed(bool)`, `app_volumes_changed(list)` | `set_master_volume(int)`, `toggle_master_mute()`, `set_app_volume(int, int)` |
-| `MediaPlayerWidget` | `play_pause_clicked()`, `next_clicked()`, `previous_clicked()`, `seek_requested(int)` | `update_track(str,str)`, `update_playback_state(bool)`, `update_art(QPixmap)`, `clear_art()`, `update_player_name(str)`, `update_position(int)`, `update_duration(int)` |
+| `MediaPlayerWidget` | `play_pause_clicked()`, `next_clicked()`, `previous_clicked()`, `seek_requested(int)` | `update_track(str,str)`, `update_playback_state(bool)`, `update_art(QPixmap)`, `clear_art()`, `update_player_name(str)`, `update_position(qlonglong)`, `update_duration(qlonglong)` |
 | `VolumeSlider` | `volume_changed(int)` | `set_volume(int)` |
 | `SidebarWindow` | `mouse_entered()`, `mouse_left()`, `app_volume_changed(int, int)` | `slide_in()`, `slide_out()`, `update_app_sliders(list)` |
 
@@ -335,6 +352,8 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 | #30    | UI Declutter & Unified Color Buttons | ✅ |
 | #31    | Fix Qt Border Bevel Glitch (The Dent) | ✅ |
 | #32    | Bump Version to v0.4 & Project Inventory | ✅ |
+| #33    | Lazy UI & Worker Initialization for Daemon Idle RAM Reduction | ✅ |
+| #34    | UX/UI Bugfixes: Hidden Layout Sync, Int64 Seek, Left Hover Margin & Native Click-Through | ✅ |
 
 ---
 

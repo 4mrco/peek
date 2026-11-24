@@ -51,6 +51,8 @@ class SidebarWindow(QWidget):
 
     WIDTH: int = 360
     ANIMATION_DURATION_MS: int = 250
+    LEFT_HOVER_MARGIN: int = 20
+    TOP_OFFSET: int = 24
 
     def __init__(self, parent: QWidget | None = None) -> None:
         # Recupera o parent (âncora) passado pelo Controller para satisfazer
@@ -104,14 +106,14 @@ class SidebarWindow(QWidget):
 
     def _setup_ui(self) -> None:
         """Layout principal da sidebar com widgets de funcionalidade."""
-        self.setFixedWidth(self.WIDTH)
         # O SidebarWindow em si fica transparente
         self.setStyleSheet("SidebarWindow { background: transparent; }")
 
         # O layout principal da janela (transparente) que segura o card principal
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 24, 0, 24)
+        main_layout.setContentsMargins(self.LEFT_HOVER_MARGIN, 0, 0, 0)
         main_layout.setSpacing(0)
+        main_layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
 
         # ── Card Principal Unificado (QFrame) ──
         self.main_card = QFrame()
@@ -237,6 +239,26 @@ class SidebarWindow(QWidget):
         assert screen is not None, "Nenhum monitor detectado"
         return screen.availableGeometry()
 
+    def _sync_layout_geometry(self) -> None:
+        """Força recálculo síncrono do layout e sizeHint mesmo com a janela oculta."""
+        if (self.layout() and
+                self.layout().sizeConstraint() != QLayout.SizeConstraint.SetFixedSize):
+            self.layout().setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+        self.main_card.updateGeometry()
+        self.updateGeometry()
+        if self.main_card.layout():
+            self.main_card.layout().activate()
+        if self.layout():
+            self.layout().activate()
+
+    def _reanchor_right(self) -> None:
+        """Mantém a borda direita colada na margem da tela preservando Y."""
+        geo = self._screen_geometry()
+        parent_pos = self.parentWidget().pos() if self.parentWidget() else QPoint(0, 0)
+        new_x = geo.x() + geo.width() - self.width() - parent_pos.x()
+        if self.x() != new_x:
+            self.move(new_x, self.y())
+
     def _offscreen_rect(self) -> QRect:
         """Retângulo posicionado fora da tela (à direita).
 
@@ -252,7 +274,7 @@ class SidebarWindow(QWidget):
         parent_pos = self.parentWidget().pos() if self.parentWidget() else QPoint(0, 0)
         return QRect(
             geo.x() + geo.width() - parent_pos.x(),
-            geo.y() - parent_pos.y(),
+            geo.y() + self.TOP_OFFSET - parent_pos.y(),
             w, h,
         )
 
@@ -271,7 +293,7 @@ class SidebarWindow(QWidget):
         parent_pos = self.parentWidget().pos() if self.parentWidget() else QPoint(0, 0)
         return QRect(
             geo.x() + geo.width() - w - parent_pos.x(),
-            geo.y() - parent_pos.y(),
+            geo.y() + self.TOP_OFFSET - parent_pos.y(),
             w, h,
         )
 
@@ -283,6 +305,7 @@ class SidebarWindow(QWidget):
             return
         self._is_visible = True
 
+        self._sync_layout_geometry()
         off_rect = self._offscreen_rect()
         on_rect = self._onscreen_rect()
 
@@ -318,13 +341,17 @@ class SidebarWindow(QWidget):
     def update_app_sliders(self, apps: list[dict[str, Any]]) -> None:
         """Instancia ou limpa dinamicamente os sliders dos aplicativos, mantendo o drag intacto."""
         current_indices = {app["index"] for app in apps}
+        layout_changed: bool = False
         
         # Remove sliders de apps que foram fechados
         for idx in list(self._app_sliders.keys()):
             if idx not in current_indices:
                 slider = self._app_sliders.pop(idx)
                 self._mixer_layout.removeWidget(slider)
+                slider.hide()
+                slider.setParent(None)
                 slider.deleteLater()
+                layout_changed = True
                 
         # Atualiza ou instancia novos sliders
         for app in apps:
@@ -354,12 +381,18 @@ class SidebarWindow(QWidget):
                 
                 self._app_sliders[idx] = slider
                 self._mixer_layout.addWidget(slider, 0, Qt.AlignmentFlag.AlignVCenter)
+                layout_changed = True
+
+        if layout_changed:
+            self._sync_layout_geometry()
 
     def _on_animation_finished(self) -> None:
         """Esconde a janela depois da animação de saída e sinaliza o controlador."""
         if not self._is_visible:
             self.hide()
             self.hidden_fully.emit()
+        else:
+            self._reanchor_right()
 
     @Slot(bool)
     def on_mic_mute_changed(self, muted: bool) -> None:
@@ -404,10 +437,7 @@ class SidebarWindow(QWidget):
             return
         if hasattr(self, '_animation') and self._animation.state() == self._animation.State.Running:
             return
-        geo        = self._screen_geometry()
-        parent_pos = self.parentWidget().pos() if self.parentWidget() else QPoint(0, 0)
-        new_x      = geo.x() + geo.width() - self.width() - parent_pos.x()
-        self.move(new_x, self.y())
+        self._reanchor_right()
 
     def enterEvent(self, event: QEnterEvent) -> None:  # noqa: N802
         self.mouse_entered.emit()

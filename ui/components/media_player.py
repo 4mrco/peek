@@ -228,8 +228,12 @@ class MediaPlayerWidget(QFrame):
         self._btn_next.clicked.connect(self.next_clicked)
 
     def _format_time(self, seconds: int) -> str:
-        m = seconds // 60
+        seconds = max(0, seconds)
+        h = seconds // 3600
+        m = (seconds % 3600) // 60
         s = seconds % 60
+        if h > 0:
+            return f"{h}:{m:02d}:{s:02d}"
         return f"{m}:{s:02d}"
 
     # ── Helpers internos ─────────────────────────────────────────────
@@ -333,7 +337,7 @@ class MediaPlayerWidget(QFrame):
         self._last_seek_time = time.time()  # Arma a trava
         self.seek_requested.emit(val)
 
-    @Slot(int)
+    @Slot("qlonglong")
     def update_position(self, pos_us: int) -> None:
         """Sincroniza a posição (vindo do backend MPRIS).
         
@@ -343,7 +347,7 @@ class MediaPlayerWidget(QFrame):
         if time.time() - self._last_seek_time < 1.5:
             return
             
-        sec = pos_us // 1_000_000
+        sec = max(0, pos_us // 1_000_000)
         self._set_current_pos_internal(sec)
 
     def _on_local_tick(self) -> None:
@@ -366,10 +370,10 @@ class MediaPlayerWidget(QFrame):
             self._seek_slider.setValue(sec)
             self._seek_slider.blockSignals(False)
             
-    @Slot(int)
+    @Slot("qlonglong")
     def update_duration(self, length_us: int) -> None:
         """Atualiza o tamanho máximo da seek bar."""
-        sec = length_us // 1_000_000
+        sec = max(0, length_us // 1_000_000)
         self._duration_s = sec
         self._seek_slider.set_time_total(self._format_time(sec))
         self._seek_slider.setRange(0, sec)
