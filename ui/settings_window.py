@@ -985,7 +985,7 @@ class ControlCenter(QWidget):
             "Type=Application\n"
             "Name=PEEK Control Center\n"
             f"Exec=python3 {main_py}\n"
-            "Icon=peek\n"
+            "Icon=peek-sidebar\n"
             "StartupWMClass=peek-gui\n"
             "Categories=Utility;\n"
             "Actions=ToggleSidebar;\n"

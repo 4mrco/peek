@@ -26,7 +26,7 @@ def _load_app_icon() -> QIcon:
         icon = QIcon(str(_APP_ICON_PATH))
         if not icon.isNull():
             return icon
-    return QIcon.fromTheme("peek")
+    return QIcon.fromTheme("peek-sidebar")
 
 
 def _is_service_registered(service_name: str) -> bool:
