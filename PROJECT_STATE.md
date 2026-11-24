@@ -282,6 +282,7 @@ O projeto PEEK recebeu seu framework inicial de documentação. Foram criados:
 - **Control Center Redimensionável e Sem Scroll Horizontal:** Removidos `setMaximumWidth(560)` e `setFixedHeight(650)`; janela abre com largura ajustada ao conteúdo (`min 600px`, redimensionável `540×500`+), `ScrollBarAlwaysOff` horizontal, `wordWrap` nas descrições e `AdjustToContents` no combo de borda.
 - **Menu de Saída Focado + Balanço L/R & Mono/Estéreo:** Removida a opção de mutar microfone do menu de saída de áudio (permanece apenas no menu/ícone do Mic). Adicionados slider inline de **Balanço L/R** (`QWidgetAction` com clique no rótulo para centralizar, preservando pico e balanço ao ajustar Master volume) e toggle **Áudio Mono (Downmix)** via `module-remap-sink` (`peek_mono_sink`) usando `pulsectl` efêmero.
 - **Fix de Auto-Hide Pós-QMenu no Wayland:** Ao fechar um `QMenu.popup()` clicando fora no Wayland, o Qt dispara `enterEvent` sintético imediato que cancelava o `_hide_timer`. `SidebarWindow` agora suprime `enterEvent` nos `150ms` após fechar o menu (`_menu_closed_at`) e usa `HoverMove` (`WA_Hover`) apenas quando há movimento real sobre o painel.
+- **Reload Dinâmico do KWin Script via `busctl`:** Como Fedora/Nobara fornece `busctl`/`qdbus-qt6` (e não `qdbus6`), a troca de canto de ativação e `install-kwin-script.sh` usam `busctl --user call org.kde.KWin /Scripting org.kde.kwin.Scripting unloadScript` seguido de `reconfigure` para desregistrar imediatamente a borda antiga.
 
 ---
 

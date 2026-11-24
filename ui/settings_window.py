@@ -850,11 +850,10 @@ class ControlCenter(QWidget):
             print(f"[PEEK:GUI] Aviso ao copiar KWin script: {e}")
 
         for cmd in (
+            ["busctl", "--user", "call", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "unloadScript", "s", "kslide-edge-trigger"],
             ["kwriteconfig6", "--file", "kwinrc", "--group", "Script-kslide-edge-trigger", "--key", "TriggerEdge", str(edge_id)],
-            ["kwriteconfig6", "--file", "kwinrc", "--group", "Plugins", "--key", "kslide-edge-triggerEnabled", "false"],
-            ["qdbus6", "org.kde.KWin", "/KWin", "reconfigure"],
             ["kwriteconfig6", "--file", "kwinrc", "--group", "Plugins", "--key", "kslide-edge-triggerEnabled", "true"],
-            ["qdbus6", "org.kde.KWin", "/KWin", "reconfigure"],
+            ["busctl", "--user", "call", "org.kde.KWin", "/KWin", "org.kde.KWin", "reconfigure"],
         ):
             try:
                 subprocess.run(cmd, capture_output=True, check=False, timeout=2)

@@ -19,17 +19,26 @@ cp "${SCRIPT_DIR}/metadata.json"          "${INSTALL_DIR}/"
 cp "${SCRIPT_DIR}/contents/code/main.js"  "${INSTALL_DIR}/contents/code/"
 cp "${SCRIPT_DIR}/contents/config/main.xml" "${INSTALL_DIR}/contents/config/"
 
+# Descarrega instância anterior no KWin (se ativa) antes de reinstalar
+if command -v busctl &>/dev/null; then
+    busctl --user call org.kde.KWin /Scripting org.kde.kwin.Scripting unloadScript s "${SCRIPT_ID}" &>/dev/null || true
+fi
+
 # Ativa o plugin no kwinrc
 kwriteconfig6 --file kwinrc --group Plugins --key "${SCRIPT_ID}Enabled" true
 
 # Recarrega o KWin para aplicar
-if command -v qdbus6 &>/dev/null; then
+if command -v busctl &>/dev/null; then
+    busctl --user call org.kde.KWin /KWin org.kde.KWin reconfigure
+elif command -v qdbus-qt6 &>/dev/null; then
+    qdbus-qt6 org.kde.KWin /KWin reconfigure
+elif command -v qdbus6 &>/dev/null; then
     qdbus6 org.kde.KWin /KWin reconfigure
 elif command -v dbus-send &>/dev/null; then
     dbus-send --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure
 else
     echo "   AVISO: Não foi possível recarregar o KWin automaticamente."
-    echo "   Faça logout/login ou execute: qdbus6 org.kde.KWin /KWin reconfigure"
+    echo "   Faça logout/login ou execute: busctl --user call org.kde.KWin /KWin org.kde.KWin reconfigure"
 fi
 
 echo ""
