@@ -11,10 +11,22 @@ from core.logger import setup_logging
 import subprocess
 
 from PySide6.QtDBus import QDBusConnection
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from core.controller import Controller
 from core.dbus_service import DBUS_SERVICE
+
+_APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "peek.svg"
+
+
+def _load_app_icon() -> QIcon:
+    """Carrega o ícone oficial do PEEK com fallback para o tema de ícones."""
+    if _APP_ICON_PATH.exists():
+        icon = QIcon(str(_APP_ICON_PATH))
+        if not icon.isNull():
+            return icon
+    return QIcon.fromTheme("peek")
 
 
 def _is_service_registered(service_name: str) -> bool:
@@ -31,6 +43,9 @@ def _is_service_registered(service_name: str) -> bool:
 def main() -> int:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    app_icon = _load_app_icon()
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
 
     # ── FLAG --daemon: modo silencioso para XDG Autostart ─────────────────
     # Discord, Telegram e similares usam este padrão: o arquivo .desktop do

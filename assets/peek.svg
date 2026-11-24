@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <!-- Clean matte dark Plasma squircle -->
+    <linearGradient id="base" x1="8" y1="8" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#252838"/>
+      <stop offset="100%" stop-color="#171923"/>
+    </linearGradient>
+
+    <!-- Cool ice-blue accent pill -->
+    <linearGradient id="pillAccent" x1="86" y1="36" x2="86" y2="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#89dceb"/>
+      <stop offset="100%" stop-color="#74a8f7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Base squircle -->
+  <rect x="8" y="8" width="112" height="112" rx="28" ry="28" fill="url(#base)"/>
+
+  <!-- 3 bold minimalist vertical pills (audio levels / faders / rhythm) -->
+  <!-- Left pill (subtle) -->
+  <rect x="33" y="47" width="14" height="38" rx="7" ry="7" fill="#cdd6f4" fill-opacity="0.35"/>
+
+  <!-- Center pill (primary bright) -->
+  <rect x="57" y="31" width="14" height="66" rx="7" ry="7" fill="#eef2ff"/>
+
+  <!-- Right pill (accent) -->
+  <rect x="81" y="40" width="14" height="50" rx="7" ry="7" fill="url(#pillAccent)"/>
+
+  <!-- Subtle outer rim -->
+  <rect x="8.75" y="8.75" width="110.5" height="110.5" rx="27.25" ry="27.25"
+        fill="none" stroke="#ffffff" stroke-opacity="0.09" stroke-width="1.5"/>
+</svg>
